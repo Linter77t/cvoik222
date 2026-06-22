@@ -1087,7 +1087,6 @@ export default function IndexPage() {
                             />
                           </div>
                         )}
-                      </div>
 
                         {gameState.answerVisible && (
                           <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-900/15 p-6">
