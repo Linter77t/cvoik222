@@ -888,9 +888,11 @@ export default function IndexPage() {
                   <div>
                     <p className="text-sm uppercase tracking-[0.35em] text-fuchsia-300/80">Аккаунт игрока</p>
                     <h1 className="mt-2 text-4xl font-black text-white">{session.name}</h1>
-                    <p className="mt-3 text-sm text-fuchsia-100/75">
-                      Игрок подключён к общей игре, видит поле, счёт и текущий вопрос в реальном времени.
-                    </p>
+                  <p className="mt-3 text-sm text-fuchsia-100/75">
+                    Игрок подключён к общей игре, видит поле, счёт и текущий вопрос в реальном времени. Изменения ведущего
+                    теперь сохраняются после перезапуска сервера, если подключена база данных.
+                  </p>
+
                   </div>
 
                   <button

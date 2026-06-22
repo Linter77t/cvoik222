@@ -1,10 +1,12 @@
 const { createServer } = require("http");
 const next = require("next");
 const { Server } = require("socket.io");
+const { Pool } = require("pg");
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
 const port = parseInt(process.env.PORT || "3000", 10);
+const databaseUrl = process.env.DATABASE_URL;
 
 const accounts = [
   { id: "host", role: "host", name: "Ведущий", password: "11111111" },
@@ -187,6 +189,8 @@ const defaultRounds = [
   },
 ];
 
+const STORAGE_ROW_ID = "main";
+
 function cloneRounds(rounds) {
   return JSON.parse(JSON.stringify(rounds));
 }
@@ -233,16 +237,111 @@ function createInitialGameState() {
   };
 }
 
-let gameState = createInitialGameState();
-let hostSocketId = null;
-let socketRoles = new Map();
+const pool = databaseUrl
+  ? new Pool({
+      connectionString: databaseUrl,
+      ssl: databaseUrl.includes("render.com") ? { rejectUnauthorized: false } : false,
+    })
+  : null;
 
-function getPublicState() {
-  return gameState;
+let gameState = createInitialGameState();
+let socketRoles = new Map();
+let saveTimer = null;
+
+function getPersistedState() {
+  const players = Object.fromEntries(
+    Object.entries(gameState.players).map(([playerId, player]) => [
+      playerId,
+      {
+        connected: false,
+        nickname: player.nickname,
+        socketId: null,
+      },
+    ]),
+  );
+
+  return {
+    ...gameState,
+    players,
+  };
+}
+
+async function ensureStorageTable() {
+  if (!pool) return;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS game_state (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function loadStateFromDatabase() {
+  if (!pool) return;
+
+  await ensureStorageTable();
+  const result = await pool.query("SELECT payload FROM game_state WHERE id = $1", [STORAGE_ROW_ID]);
+
+  if (result.rows.length === 0) {
+    await pool.query(
+      "INSERT INTO game_state (id, payload, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (id) DO NOTHING",
+      [STORAGE_ROW_ID, JSON.stringify(getPersistedState())],
+    );
+    return;
+  }
+
+  const payload = result.rows[0].payload;
+  const base = createInitialGameState();
+  const rounds = Array.isArray(payload?.rounds) && payload.rounds.length > 0 ? payload.rounds : base.rounds;
+
+  gameState = {
+    ...base,
+    ...payload,
+    rounds,
+    openedQuestions: payload?.openedQuestions || createInitialOpenedState(rounds),
+    scores: { ...base.scores, ...(payload?.scores || {}) },
+    players: {
+      ...base.players,
+      ...(payload?.players || {}),
+    },
+    buzzState: { ...base.buzzState, ...(payload?.buzzState || {}) },
+  };
+
+  Object.keys(gameState.players).forEach((playerId) => {
+    gameState.players[playerId].connected = false;
+    gameState.players[playerId].socketId = null;
+  });
+}
+
+async function saveStateToDatabase() {
+  if (!pool) return;
+
+  await pool.query(
+    "INSERT INTO game_state (id, payload, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()",
+    [STORAGE_ROW_ID, JSON.stringify(getPersistedState())],
+  );
+}
+
+function scheduleStateSave() {
+  if (!pool) return;
+
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+  }
+
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveStateToDatabase().catch((error) => {
+      console.error("Failed to save game state", error);
+    });
+  }, 150);
 }
 
 function emitState(io) {
-  io.emit("game:state", getPublicState());
+  io.emit("game:state", gameState);
+  scheduleStateSave();
 }
 
 function getPlayerList() {
@@ -270,318 +369,320 @@ function hostOnly(socket, callback) {
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
-app.prepare().then(() => {
-  const httpServer = createServer((req, res) => {
-    handle(req, res);
-  });
-
-  const io = new Server(httpServer, {
-    cors: {
-      origin: "*",
-    },
-  });
-
-  io.on("connection", (socket) => {
-    socket.emit("game:state", getPublicState());
-
-    socket.on("auth:login", (payload, callback = () => {}) => {
-      const account = accounts.find((item) => item.id === payload?.accountId);
-
-      if (!account) {
-        callback({ ok: false, error: "Аккаунт не найден" });
-        return;
-      }
-
-      if (account.role === "host") {
-        if (payload?.password !== account.password) {
-          callback({ ok: false, error: "Неверный пароль ведущего" });
-          return;
-        }
-        hostSocketId = socket.id;
-        socketRoles.set(socket.id, "host");
-        callback({ ok: true, session: { id: account.id, role: account.role, name: gameState.hostNickname } });
-        emitState(io);
-        return;
-      }
-
-      gameState.players[account.id] = {
-        ...gameState.players[account.id],
-        connected: true,
-        socketId: socket.id,
-      };
-      socketRoles.set(socket.id, account.id);
-      callback({ ok: true, session: { id: account.id, role: account.role, name: gameState.players[account.id].nickname } });
-      emitState(io);
-    });
-
-    socket.on("auth:logout", () => {
-      const role = socketRoles.get(socket.id);
-      if (role === "host") {
-        hostSocketId = null;
-      }
-      if (role && role !== "host" && gameState.players[role]) {
-        gameState.players[role] = {
-          ...gameState.players[role],
-          connected: false,
-          socketId: null,
-        };
-      }
-      socketRoles.delete(socket.id);
-      emitState(io);
-    });
-
-    socket.on("game:start", () => {
-      hostOnly(socket, () => {
-        if (!allPlayersConnected()) return;
-        gameState.gameStarted = true;
-        gameState.paused = false;
-        gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
-        gameState.selectedQuestion = null;
-        gameState.buzzState = { lockedBy: null, active: false };
-        gameState.answerVisible = false;
-        gameState.hostNotes = "";
-        gameState.scores = { player1: 0, player2: 0, player3: 0 };
-        emitState(io);
+loadStateFromDatabase()
+  .catch((error) => {
+    console.error("Failed to load persisted game state", error);
+  })
+  .finally(() => {
+    app.prepare().then(() => {
+      const httpServer = createServer((req, res) => {
+        handle(req, res);
       });
-    });
 
-    socket.on("game:pauseToggle", () => {
-      hostOnly(socket, () => {
-        gameState.paused = !gameState.paused;
-        if (gameState.selectedQuestion) {
-          gameState.buzzState.active = !gameState.paused;
-        }
-        emitState(io);
+      const io = new Server(httpServer, {
+        cors: {
+          origin: "*",
+        },
       });
-    });
 
-    socket.on("game:reset", () => {
-      hostOnly(socket, () => {
-        const players = gameState.players;
-        gameState = createInitialGameState();
-        Object.keys(players).forEach((playerId) => {
-          gameState.players[playerId].connected = players[playerId].connected;
-          gameState.players[playerId].socketId = players[playerId].socketId;
-          gameState.players[playerId].nickname = players[playerId].nickname;
-        });
-        emitState(io);
-      });
-    });
+      io.on("connection", (socket) => {
+        socket.emit("game:state", gameState);
 
-    socket.on("round:set", (roundIndex) => {
-      hostOnly(socket, () => {
-        if (roundIndex < 0 || roundIndex >= gameState.rounds.length) return;
-        setRoundIndex(roundIndex);
-        emitState(io);
-      });
-    });
+        socket.on("auth:login", (payload, callback = () => {}) => {
+          const account = accounts.find((item) => item.id === payload?.accountId);
 
-    socket.on("round:next", () => {
-      hostOnly(socket, () => {
-        if (gameState.currentRound >= gameState.rounds.length - 1) return;
-        setRoundIndex(gameState.currentRound + 1);
-        emitState(io);
-      });
-    });
+          if (!account) {
+            callback({ ok: false, error: "Аккаунт не найден" });
+            return;
+          }
 
-    socket.on("round:prev", () => {
-      hostOnly(socket, () => {
-        if (gameState.currentRound <= 0) return;
-        setRoundIndex(gameState.currentRound - 1);
-        emitState(io);
-      });
-    });
+          if (account.role === "host") {
+            if (payload?.password !== account.password) {
+              callback({ ok: false, error: "Неверный пароль ведущего" });
+              return;
+            }
+            socketRoles.set(socket.id, "host");
+            callback({ ok: true, session: { id: account.id, role: account.role, name: gameState.hostNickname } });
+            emitState(io);
+            return;
+          }
 
-    socket.on("question:open", ({ categoryTitle, price }) => {
-      hostOnly(socket, () => {
-        if (!gameState.gameStarted || gameState.paused) return;
-        const round = gameState.rounds[gameState.currentRound];
-        const category = round.categories.find((item) => item.title === categoryTitle);
-        const question = category?.questions.find((item) => item.price === price);
-        if (!question) return;
-
-        gameState.selectedQuestion = {
-          categoryTitle,
-          roundId: round.id,
-          price: question.price,
-          question: question.question,
-          answer: question.answer,
-        };
-        gameState.buzzState = { lockedBy: null, active: true };
-        gameState.answerVisible = false;
-        gameState.hostNotes = "";
-        emitState(io);
-      });
-    });
-
-    socket.on("question:close", () => {
-      hostOnly(socket, () => {
-        if (!gameState.selectedQuestion) return;
-        const key = `${gameState.selectedQuestion.roundId}-${gameState.selectedQuestion.categoryTitle}-${gameState.selectedQuestion.price}`;
-        gameState.openedQuestions[key] = true;
-        gameState.selectedQuestion = null;
-        gameState.buzzState = { lockedBy: null, active: false };
-        gameState.answerVisible = false;
-        gameState.hostNotes = "";
-        emitState(io);
-      });
-    });
-
-    socket.on("question:toggleAnswer", () => {
-      hostOnly(socket, () => {
-        if (!gameState.selectedQuestion) return;
-        gameState.answerVisible = !gameState.answerVisible;
-        emitState(io);
-      });
-    });
-
-    socket.on("question:resetBuzz", () => {
-      hostOnly(socket, () => {
-        if (!gameState.selectedQuestion || gameState.paused) return;
-        gameState.buzzState = { lockedBy: null, active: true };
-        emitState(io);
-      });
-    });
-
-    socket.on("question:updateField", ({ field, value }) => {
-      hostOnly(socket, () => {
-        if (!gameState.selectedQuestion) return;
-        const { roundId, categoryTitle, price } = gameState.selectedQuestion;
-        gameState.selectedQuestion[field] = value;
-        gameState.rounds = gameState.rounds.map((round) => {
-          if (round.id !== roundId) return round;
-          return {
-            ...round,
-            categories: round.categories.map((category) => {
-              if (category.title !== categoryTitle) return category;
-              return {
-                ...category,
-                questions: category.questions.map((question) =>
-                  question.price === price ? { ...question, [field]: value } : question,
-                ),
-              };
-            }),
+          gameState.players[account.id] = {
+            ...gameState.players[account.id],
+            connected: true,
+            socketId: socket.id,
           };
+          socketRoles.set(socket.id, account.id);
+          callback({ ok: true, session: { id: account.id, role: account.role, name: gameState.players[account.id].nickname } });
+          emitState(io);
         });
-        emitState(io);
-      });
-    });
 
-    socket.on("game:updateHostNotes", (value) => {
-      hostOnly(socket, () => {
-        gameState.hostNotes = value;
-        emitState(io);
-      });
-    });
-
-    socket.on("score:update", ({ playerId, delta }) => {
-      hostOnly(socket, () => {
-        if (!(playerId in gameState.scores)) return;
-        gameState.scores[playerId] += delta;
-        emitState(io);
-      });
-    });
-
-    socket.on("buzz:lock", ({ playerId }) => {
-      const role = socketRoles.get(socket.id);
-      if (!gameState.selectedQuestion || !gameState.buzzState.active || gameState.buzzState.lockedBy || gameState.paused) return;
-      if (role !== playerId) return;
-      gameState.buzzState = { lockedBy: playerId, active: false };
-      emitState(io);
-    });
-
-    socket.on("nickname:update", ({ accountId, value }) => {
-      const role = socketRoles.get(socket.id);
-      const nickname = value?.trim();
-      if (!nickname) return;
-
-      if (accountId === "host") {
-        if (role !== "host") return;
-        gameState.hostNickname = nickname;
-        emitState(io);
-        return;
-      }
-
-      if (role !== "host" && role !== accountId) return;
-      if (!gameState.players[accountId]) return;
-
-      gameState.players[accountId].nickname = nickname;
-      emitState(io);
-    });
-
-    socket.on("editor:updateRoundName", ({ roundIndex, value }) => {
-      hostOnly(socket, () => {
-        if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
-        gameState.rounds[roundIndex].name = value;
-        emitState(io);
-      });
-    });
-
-    socket.on("editor:updateCategoryTitle", ({ roundIndex, categoryIndex, value }) => {
-      hostOnly(socket, () => {
-        if (gameState.gameStarted || !gameState.rounds[roundIndex]?.categories[categoryIndex]) return;
-        gameState.rounds[roundIndex].categories[categoryIndex].title = value;
-        gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
-        emitState(io);
-      });
-    });
-
-    socket.on("editor:updateQuestionField", ({ roundIndex, categoryIndex, questionIndex, field, value }) => {
-      hostOnly(socket, () => {
-        if (gameState.gameStarted) return;
-        const question = gameState.rounds[roundIndex]?.categories[categoryIndex]?.questions[questionIndex];
-        if (!question) return;
-        question[field] = field === "price" ? Number(value) : value;
-        emitState(io);
-      });
-    });
-
-    socket.on("editor:addCategory", ({ roundIndex }) => {
-      hostOnly(socket, () => {
-        if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
-        const round = gameState.rounds[roundIndex];
-        const prices = round.values.length ? round.values : [100, 200, 300, 400, 500];
-        round.categories.push({
-          title: `Новая категория ${round.categories.length + 1}`,
-          questions: prices.map((price) => ({ price, question: "Новый вопрос", answer: "Новый ответ" })),
+        socket.on("auth:logout", () => {
+          const role = socketRoles.get(socket.id);
+          if (role && role !== "host" && gameState.players[role]) {
+            gameState.players[role] = {
+              ...gameState.players[role],
+              connected: false,
+              socketId: null,
+            };
+          }
+          socketRoles.delete(socket.id);
+          emitState(io);
         });
-        gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
-        emitState(io);
-      });
-    });
 
-    socket.on("editor:removeCategory", ({ roundIndex, categoryIndex }) => {
-      hostOnly(socket, () => {
-        if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
-        gameState.rounds[roundIndex].categories = gameState.rounds[roundIndex].categories.filter((_, index) => index !== categoryIndex);
-        gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
-        emitState(io);
-      });
-    });
+        socket.on("game:start", () => {
+          hostOnly(socket, () => {
+            if (!allPlayersConnected()) return;
+            gameState.gameStarted = true;
+            gameState.paused = false;
+            gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
+            gameState.selectedQuestion = null;
+            gameState.buzzState = { lockedBy: null, active: false };
+            gameState.answerVisible = false;
+            gameState.hostNotes = "";
+            gameState.scores = { player1: 0, player2: 0, player3: 0 };
+            emitState(io);
+          });
+        });
 
-    socket.on("disconnect", () => {
-      const role = socketRoles.get(socket.id);
-      if (role === "host") {
-        hostSocketId = null;
-      }
-      if (role && role !== "host" && gameState.players[role]) {
-        gameState.players[role] = {
-          ...gameState.players[role],
-          connected: false,
-          socketId: null,
-        };
-      }
-      socketRoles.delete(socket.id);
-      emitState(io);
+        socket.on("game:pauseToggle", () => {
+          hostOnly(socket, () => {
+            gameState.paused = !gameState.paused;
+            if (gameState.selectedQuestion) {
+              gameState.buzzState.active = !gameState.paused;
+            }
+            emitState(io);
+          });
+        });
+
+        socket.on("game:reset", () => {
+          hostOnly(socket, () => {
+            const players = gameState.players;
+            gameState = createInitialGameState();
+            Object.keys(players).forEach((playerId) => {
+              gameState.players[playerId].connected = players[playerId].connected;
+              gameState.players[playerId].socketId = players[playerId].socketId;
+              gameState.players[playerId].nickname = players[playerId].nickname;
+            });
+            emitState(io);
+          });
+        });
+
+        socket.on("round:set", (roundIndex) => {
+          hostOnly(socket, () => {
+            if (roundIndex < 0 || roundIndex >= gameState.rounds.length) return;
+            setRoundIndex(roundIndex);
+            emitState(io);
+          });
+        });
+
+        socket.on("round:next", () => {
+          hostOnly(socket, () => {
+            if (gameState.currentRound >= gameState.rounds.length - 1) return;
+            setRoundIndex(gameState.currentRound + 1);
+            emitState(io);
+          });
+        });
+
+        socket.on("round:prev", () => {
+          hostOnly(socket, () => {
+            if (gameState.currentRound <= 0) return;
+            setRoundIndex(gameState.currentRound - 1);
+            emitState(io);
+          });
+        });
+
+        socket.on("question:open", ({ categoryTitle, price }) => {
+          hostOnly(socket, () => {
+            if (!gameState.gameStarted || gameState.paused) return;
+            const round = gameState.rounds[gameState.currentRound];
+            const category = round.categories.find((item) => item.title === categoryTitle);
+            const question = category?.questions.find((item) => item.price === price);
+            if (!question) return;
+
+            gameState.selectedQuestion = {
+              categoryTitle,
+              roundId: round.id,
+              price: question.price,
+              question: question.question,
+              answer: question.answer,
+            };
+            gameState.buzzState = { lockedBy: null, active: true };
+            gameState.answerVisible = false;
+            gameState.hostNotes = "";
+            emitState(io);
+          });
+        });
+
+        socket.on("question:close", () => {
+          hostOnly(socket, () => {
+            if (!gameState.selectedQuestion) return;
+            const key = `${gameState.selectedQuestion.roundId}-${gameState.selectedQuestion.categoryTitle}-${gameState.selectedQuestion.price}`;
+            gameState.openedQuestions[key] = true;
+            gameState.selectedQuestion = null;
+            gameState.buzzState = { lockedBy: null, active: false };
+            gameState.answerVisible = false;
+            gameState.hostNotes = "";
+            emitState(io);
+          });
+        });
+
+        socket.on("question:toggleAnswer", () => {
+          hostOnly(socket, () => {
+            if (!gameState.selectedQuestion) return;
+            gameState.answerVisible = !gameState.answerVisible;
+            emitState(io);
+          });
+        });
+
+        socket.on("question:resetBuzz", () => {
+          hostOnly(socket, () => {
+            if (!gameState.selectedQuestion || gameState.paused) return;
+            gameState.buzzState = { lockedBy: null, active: true };
+            emitState(io);
+          });
+        });
+
+        socket.on("question:updateField", ({ field, value }) => {
+          hostOnly(socket, () => {
+            if (!gameState.selectedQuestion) return;
+            const { roundId, categoryTitle, price } = gameState.selectedQuestion;
+            gameState.selectedQuestion[field] = value;
+            gameState.rounds = gameState.rounds.map((round) => {
+              if (round.id !== roundId) return round;
+              return {
+                ...round,
+                categories: round.categories.map((category) => {
+                  if (category.title !== categoryTitle) return category;
+                  return {
+                    ...category,
+                    questions: category.questions.map((question) =>
+                      question.price === price ? { ...question, [field]: value } : question,
+                    ),
+                  };
+                }),
+              };
+            });
+            emitState(io);
+          });
+        });
+
+        socket.on("game:updateHostNotes", (value) => {
+          hostOnly(socket, () => {
+            gameState.hostNotes = value;
+            emitState(io);
+          });
+        });
+
+        socket.on("score:update", ({ playerId, delta }) => {
+          hostOnly(socket, () => {
+            if (!(playerId in gameState.scores)) return;
+            gameState.scores[playerId] += delta;
+            emitState(io);
+          });
+        });
+
+        socket.on("buzz:lock", ({ playerId }) => {
+          const role = socketRoles.get(socket.id);
+          if (!gameState.selectedQuestion || !gameState.buzzState.active || gameState.buzzState.lockedBy || gameState.paused) return;
+          if (role !== playerId) return;
+          gameState.buzzState = { lockedBy: playerId, active: false };
+          emitState(io);
+        });
+
+        socket.on("nickname:update", ({ accountId, value }) => {
+          const role = socketRoles.get(socket.id);
+          const nickname = value?.trim();
+          if (!nickname) return;
+
+          if (accountId === "host") {
+            if (role !== "host") return;
+            gameState.hostNickname = nickname;
+            emitState(io);
+            return;
+          }
+
+          if (role !== "host" && role !== accountId) return;
+          if (!gameState.players[accountId]) return;
+
+          gameState.players[accountId].nickname = nickname;
+          emitState(io);
+        });
+
+        socket.on("editor:updateRoundName", ({ roundIndex, value }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
+            gameState.rounds[roundIndex].name = value;
+            emitState(io);
+          });
+        });
+
+        socket.on("editor:updateCategoryTitle", ({ roundIndex, categoryIndex, value }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted || !gameState.rounds[roundIndex]?.categories[categoryIndex]) return;
+            gameState.rounds[roundIndex].categories[categoryIndex].title = value;
+            gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
+            emitState(io);
+          });
+        });
+
+        socket.on("editor:updateQuestionField", ({ roundIndex, categoryIndex, questionIndex, field, value }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted) return;
+            const question = gameState.rounds[roundIndex]?.categories[categoryIndex]?.questions[questionIndex];
+            if (!question) return;
+            question[field] = field === "price" ? Number(value) : value;
+            emitState(io);
+          });
+        });
+
+        socket.on("editor:addCategory", ({ roundIndex }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
+            const round = gameState.rounds[roundIndex];
+            const prices = round.values.length ? round.values : [100, 200, 300, 400, 500];
+            round.categories.push({
+              title: `Новая категория ${round.categories.length + 1}`,
+              questions: prices.map((price) => ({ price, question: "Новый вопрос", answer: "Новый ответ" })),
+            });
+            gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
+            emitState(io);
+          });
+        });
+
+        socket.on("editor:removeCategory", ({ roundIndex, categoryIndex }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
+            gameState.rounds[roundIndex].categories = gameState.rounds[roundIndex].categories.filter((_, index) => index !== categoryIndex);
+            gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
+            emitState(io);
+          });
+        });
+
+        socket.on("disconnect", () => {
+          const role = socketRoles.get(socket.id);
+          if (role && role !== "host" && gameState.players[role]) {
+            gameState.players[role] = {
+              ...gameState.players[role],
+              connected: false,
+              socketId: null,
+            };
+          }
+          socketRoles.delete(socket.id);
+          emitState(io);
+        });
+      });
+
+      httpServer
+        .once("error", (err) => {
+          console.error(err);
+          process.exit(1);
+        })
+        .listen(port, hostname, () => {
+          console.log(`> Ready on http://${hostname}:${port}`);
+          if (!pool) {
+            console.log("> DATABASE_URL is not set. Game settings will reset after server restart.");
+          }
+        });
     });
   });
-
-  httpServer
-    .once("error", (err) => {
-      console.error(err);
-      process.exit(1);
-    })
-    .listen(port, hostname, () => {
-      console.log(`> Ready on http://${hostname}:${port}`);
-    });
-});

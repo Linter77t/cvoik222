@@ -3,9 +3,17 @@ services:
     name: svoyak-online
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    buildCommand: pnpm install --frozen-lockfile && pnpm run build
+    startCommand: pnpm run start
     autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: svoyak-db
+          property: connectionString
+
+databases:
+  - name: svoyak-db
+    plan: free
