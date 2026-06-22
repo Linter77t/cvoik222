@@ -1089,17 +1089,6 @@ export default function IndexPage() {
                         )}
                       </div>
 
-
-                        {selectedQuestion.imageUrl && (
-                          <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-6">
-                            <img
-                              src={selectedQuestion.imageUrl}
-                              alt="Иллюстрация вопроса"
-                              className="max-h-[420px] w-full rounded-2xl object-contain"
-                            />
-                          </div>
-                        )}
-
                         {gameState.answerVisible && (
                           <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-900/15 p-6">
                             <div className="text-xs uppercase tracking-[0.25em] text-emerald-300/80">Правильный ответ</div>
