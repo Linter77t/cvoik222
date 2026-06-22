@@ -7,7 +7,7 @@ const hostname = "0.0.0.0";
 const port = parseInt(process.env.PORT || "3000", 10);
 
 const accounts = [
-  { id: "host", role: "host", name: "Ведущий", password: "17401740" },
+  { id: "host", role: "host", name: "Ведущий", password: "11111111" },
   { id: "player1", role: "player", name: "Игрок 1" },
   { id: "player2", role: "player", name: "Игрок 2" },
   { id: "player3", role: "player", name: "Игрок 3" },

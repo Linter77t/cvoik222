@@ -390,7 +390,7 @@ export default function IndexPage() {
                         value={loginForm.password}
                         onChange={(event) => setLoginForm((prev) => ({ ...prev, password: event.target.value }))}
                         className="w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-white outline-none placeholder:text-fuchsia-200/30 focus:border-fuchsia-400"
-                        placeholder="Введите пароль 17401740"
+                        placeholder="Введите пароль ведущего"
                       />
                     </label>
                   ) : (
@@ -882,16 +882,30 @@ export default function IndexPage() {
               </section>
             </div>
           ) : (
-            <div className="mx-auto flex min-h-screen max-w-5xl items-center px-4 py-8 lg:px-8">
-              <div className="grid w-full gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-                <section className="rounded-3xl border border-fuchsia-500/25 bg-[#12061d] p-8">
-                  <p className="text-sm uppercase tracking-[0.35em] text-fuchsia-300/80">Аккаунт игрока</p>
-                  <h1 className="mt-2 text-4xl font-black text-white">{session.name}</h1>
-                  <p className="mt-4 text-sm text-fuchsia-100/75">
-                    Игрок подключён к общей игре и видит всё в реальном времени.
-                  </p>
+            <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 lg:px-8">
+              <header className="rounded-3xl border border-fuchsia-500/30 bg-[#12061d] p-6 shadow-[0_0_40px_rgba(168,85,247,0.18)]">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <p className="text-sm uppercase tracking-[0.35em] text-fuchsia-300/80">Аккаунт игрока</p>
+                    <h1 className="mt-2 text-4xl font-black text-white">{session.name}</h1>
+                    <p className="mt-3 text-sm text-fuchsia-100/75">
+                      Игрок подключён к общей игре, видит поле, счёт и текущий вопрос в реальном времени.
+                    </p>
+                  </div>
 
-                  <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="rounded-xl border border-fuchsia-400/35 bg-black/20 px-4 py-3 text-sm font-semibold text-fuchsia-100 transition hover:border-fuchsia-300"
+                  >
+                    Выйти
+                  </button>
+                </div>
+              </header>
+
+              <section className="grid gap-6 xl:grid-cols-[1fr_1.8fr]">
+                <aside className="space-y-6">
+                  <div className="rounded-3xl border border-fuchsia-500/20 bg-[#12061d] p-6">
                     <label className="block">
                       <span className="mb-2 block text-sm text-fuchsia-100/80">Ваш никнейм</span>
                       <input
@@ -902,50 +916,114 @@ export default function IndexPage() {
                     </label>
                   </div>
 
-                  <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
-                    <div className="text-sm font-semibold text-white">Статус подключения участников</div>
-                    <div className="mt-4 space-y-2">
-                      {playersList.map((player) => (
-                        <div key={player.id} className="flex items-center justify-between text-sm text-fuchsia-100/85">
-                          <span>{player.name}</span>
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-bold uppercase ${
-                              player.connected ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 text-white/70"
-                            }`}
-                          >
-                            {player.connected ? "В сети" : "Ожидание"}
-                          </span>
+                  <div className="rounded-3xl border border-fuchsia-500/20 bg-[#12061d] p-6">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-xl font-bold text-white">Счёт игроков</h2>
+                      <span className="rounded-full bg-fuchsia-500/10 px-3 py-1 text-xs uppercase tracking-[0.25em] text-fuchsia-300">
+                        Онлайн
+                      </span>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {totalScores.map((player) => (
+                        <div key={player.id} className="rounded-2xl border border-fuchsia-500/15 bg-black/20 p-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-lg font-semibold">{player.name}</span>
+                            <span className="text-2xl font-black text-fuchsia-300">{player.score}</span>
+                          </div>
+                          <div className="mt-2 text-xs uppercase tracking-[0.25em] text-fuchsia-200/60">
+                            {player.connected ? "В сети" : "Не в сети"}
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="mt-6 rounded-xl border border-fuchsia-400/35 bg-black/20 px-4 py-3 text-sm font-semibold text-fuchsia-100 transition hover:border-fuchsia-300"
-                  >
-                    Выйти
-                  </button>
-                </section>
+                </aside>
 
                 <section className="rounded-3xl border border-fuchsia-500/25 bg-[#0f0618] p-8">
                   {!gameState.gameStarted ? (
-                    <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-                      <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Ожидание ведущего</p>
-                      <h2 className="mt-4 text-3xl font-black text-white">Игра ещё не началась</h2>
-                      <p className="mt-4 max-w-lg text-sm text-fuchsia-100/70">
-                        Когда все игроки войдут, ведущий сможет запустить общую онлайн-игру.
-                      </p>
+                    <div className="space-y-6">
+                      <div className="flex min-h-[220px] flex-col items-center justify-center text-center">
+                        <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Ожидание ведущего</p>
+                        <h2 className="mt-4 text-3xl font-black text-white">Игра ещё не началась</h2>
+                        <p className="mt-4 max-w-lg text-sm text-fuchsia-100/70">
+                          Когда все игроки войдут, ведущий сможет запустить общую онлайн-игру.
+                        </p>
+                      </div>
+
+                      <div>
+                        <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Игровое поле</p>
+                            <h2 className="mt-2 text-3xl font-black">{currentRound.name}</h2>
+                          </div>
+                          <div className="text-sm text-fuchsia-100/70">Игроки уже видят категории и стоимость вопросов</div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+                          {currentRound.categories.map((category) => (
+                            <div key={category.title} className="overflow-hidden rounded-3xl border border-fuchsia-500/20 bg-[#14081f]">
+                              <div className="flex min-h-[96px] items-center justify-center border-b border-fuchsia-500/20 px-3 py-4 text-center text-lg font-bold text-fuchsia-100">
+                                {category.title}
+                              </div>
+
+                              <div className="grid gap-px bg-fuchsia-500/10">
+                                {category.questions.map((item) => {
+                                  const opened = gameState.openedQuestions?.[getQuestionKey(currentRound.id, category.title, item.price)];
+                                  return (
+                                    <div
+                                      key={`${category.title}-${item.price}`}
+                                      className={`flex min-h-[88px] items-center justify-center px-3 py-4 text-center text-3xl font-black ${
+                                        opened ? "bg-[#241230] text-fuchsia-100/25" : "bg-[#1a0c28] text-fuchsia-300"
+                                      }`}
+                                    >
+                                      {opened ? "—" : item.price}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   ) : !selectedQuestion ? (
-                    <div className="flex min-h-[420px] flex-col items-center justify-center text-center">
-                      <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Ожидание вопроса</p>
-                      <h2 className="mt-4 text-3xl font-black text-white">Ждите, пока ведущий откроет вопрос</h2>
-                      <p className="mt-4 max-w-lg text-sm text-fuchsia-100/70">Как только вопрос появится, кнопка ответа станет активной.</p>
+                    <div>
+                      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Игровое поле</p>
+                          <h2 className="mt-2 text-3xl font-black">{currentRound.name}</h2>
+                        </div>
+                        <div className="text-sm text-fuchsia-100/70">Ждите, пока ведущий откроет вопрос</div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+                        {currentRound.categories.map((category) => (
+                          <div key={category.title} className="overflow-hidden rounded-3xl border border-fuchsia-500/20 bg-[#14081f]">
+                            <div className="flex min-h-[96px] items-center justify-center border-b border-fuchsia-500/20 px-3 py-4 text-center text-lg font-bold text-fuchsia-100">
+                              {category.title}
+                            </div>
+
+                            <div className="grid gap-px bg-fuchsia-500/10">
+                              {category.questions.map((item) => {
+                                const opened = gameState.openedQuestions?.[getQuestionKey(currentRound.id, category.title, item.price)];
+                                return (
+                                  <div
+                                    key={`${category.title}-${item.price}`}
+                                    className={`flex min-h-[88px] items-center justify-center px-3 py-4 text-center text-3xl font-black ${
+                                      opened ? "bg-[#241230] text-fuchsia-100/25" : "bg-[#1a0c28] text-fuchsia-300"
+                                    }`}
+                                  >
+                                    {opened ? "—" : item.price}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex min-h-[420px] flex-col justify-between">
+                    <div className="flex min-h-[620px] flex-col justify-between">
                       <div>
                         <div className="flex items-center justify-between gap-4">
                           <div>
@@ -961,6 +1039,13 @@ export default function IndexPage() {
                         <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-6">
                           <p className="text-center text-2xl font-bold leading-relaxed text-white">{selectedQuestion.question}</p>
                         </div>
+
+                        {gameState.answerVisible && (
+                          <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-900/15 p-6">
+                            <div className="text-xs uppercase tracking-[0.25em] text-emerald-300/80">Правильный ответ</div>
+                            <div className="mt-3 text-2xl font-bold text-white">{selectedQuestion.answer}</div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="mt-8">
@@ -990,7 +1075,7 @@ export default function IndexPage() {
                     </div>
                   )}
                 </section>
-              </div>
+              </section>
             </div>
           )}
         </main>
