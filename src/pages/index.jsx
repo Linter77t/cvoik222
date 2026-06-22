@@ -1,3 +1,4 @@
+/* eslint-disable prefer-destructuring, no-nested-ternary, jsx-a11y/label-has-associated-control, react/no-array-index-key */
 import Head from "next/head";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
@@ -280,9 +281,6 @@ export default function IndexPage() {
   const currentRound = safeRounds[safeCurrentRoundIndex];
   const selectedQuestion = gameState.selectedQuestion;
   const playersList = getPlayersList(gameState.players);
-  const questionKey = selectedQuestion
-    ? getQuestionKey(selectedQuestion.roundId, selectedQuestion.categoryTitle, selectedQuestion.price)
-    : null;
 
   const allPlayersConnected = useMemo(() => playersList.every((player) => player.connected), [playersList]);
   const remainingInRound = useMemo(
@@ -396,9 +394,10 @@ export default function IndexPage() {
                       />
                     </label>
                   ) : (
-                    <div className="rounded-2xl border border-emerald-400/20 bg-emerald-700/10 px-4 py-3 text-sm text-emerald-100">
-                      Для игроков пароль не нужен. Просто выбери аккаунт и нажми "Войти".
-                    </div>
+                      <div className="rounded-2xl border border-emerald-400/20 bg-emerald-700/10 px-4 py-3 text-sm text-emerald-100">
+                        Для игроков пароль не нужен. Просто выбери аккаунт и нажми &quot;Войти&quot;.
+                      </div>
+
                   )}
 
                   {loginError && <div className="rounded-2xl bg-rose-900/30 px-4 py-3 text-sm text-rose-200">{loginError}</div>}
