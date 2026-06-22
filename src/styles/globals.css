@@ -12,7 +12,8 @@
 html,
 body {
   font-family: Manrope, "Manrope-Fallback", Arial, sans-serif;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

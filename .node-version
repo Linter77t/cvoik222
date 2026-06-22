@@ -1,0 +1,2 @@
+# Render deployment settings
+node_version = "20"
