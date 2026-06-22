@@ -189,6 +189,98 @@ const defaultRounds = [
   },
 ];
 
+const defaultFinalRound = {
+  categories: [
+    "История",
+    "Кино",
+    "Музыка",
+    "Спорт",
+    "Наука",
+    "География",
+    "Литература",
+    "Технологии",
+    "Природа",
+    "Искусство",
+  ],
+  question: "Назовите самый большой океан на Земле.",
+  answer: "Тихий океан",
+};
+
+function cloneFinalRound(finalRound) {
+  return JSON.parse(JSON.stringify(finalRound));
+}
+
+function createInitialFinalState() {
+  return {
+    active: false,
+    phase: "idle",
+    chooserOrder: ["player1", "player2", "player3"],
+    currentChooserIndex: 0,
+    removedCategories: [],
+    selectedCategory: null,
+    wagers: {
+      player1: null,
+      player2: null,
+      player3: null,
+    },
+    wagerResults: {
+      player1: null,
+      player2: null,
+      player3: null,
+    },
+    answerVisible: false,
+  };
+}
+
+function getRemainingFinalCategories(finalRound, finalState) {
+  return finalRound.categories.filter((category) => !finalState.removedCategories.includes(category));
+}
+
+function getNextFinalChooserIndex(currentIndex) {
+  const order = createInitialFinalState().chooserOrder;
+  return (currentIndex + 1) % order.length;
+}
+
+function resetRoundState() {
+  gameState.selectedQuestion = null;
+  gameState.buzzState = { lockedBy: null, active: false };
+  gameState.answerVisible = false;
+  gameState.hostNotes = "";
+}
+
+function resetFinalState() {
+  gameState.finalState = createInitialFinalState();
+}
+
+function startFinalRound() {
+  resetRoundState();
+  gameState.finalState = createInitialFinalState();
+  gameState.finalState.active = true;
+  gameState.finalState.phase = "categories";
+}
+
+function isFinalRoundActive() {
+  return Boolean(gameState.finalState?.active);
+}
+
+function allFinalWagersSubmitted() {
+  return Object.values(gameState.finalState?.wagers || {}).every((value) => typeof value === "number");
+}
+
+function maybeStartFinalAfterLastRound() {
+  const isLastRound = gameState.currentRound === gameState.rounds.length - 1;
+  if (!isLastRound || isFinalRoundActive()) return;
+
+  const round = gameState.rounds[gameState.currentRound];
+  const allOpened = round.categories.every((category) =>
+    category.questions.every((item) => gameState.openedQuestions?.[`${round.id}-${category.title}-${item.price}`]),
+  );
+
+  if (allOpened) {
+    startFinalRound();
+  }
+}
+
 const STORAGE_ROW_ID = "main";
 
 function cloneRounds(rounds) {
@@ -219,6 +311,7 @@ function createInitialGameState() {
 
   return {
     rounds,
+    finalRound: cloneFinalRound(defaultFinalRound),
     scores: {
       player1: 0,
       player2: 0,
@@ -232,6 +325,7 @@ function createInitialGameState() {
     hostNotes: "",
     gameStarted: false,
     paused: false,
+    finalState: createInitialFinalState(),
     players: createPlayersMap(),
     hostNickname: "Ведущий",
   };
@@ -295,11 +389,13 @@ async function loadStateFromDatabase() {
   const payload = result.rows[0].payload;
   const base = createInitialGameState();
   const rounds = Array.isArray(payload?.rounds) && payload.rounds.length > 0 ? payload.rounds : base.rounds;
+  const finalRound = payload?.finalRound ? { ...base.finalRound, ...payload.finalRound } : base.finalRound;
 
   gameState = {
     ...base,
     ...payload,
     rounds,
+    finalRound,
     openedQuestions: payload?.openedQuestions || createInitialOpenedState(rounds),
     scores: { ...base.scores, ...(payload?.scores || {}) },
     players: {
@@ -307,6 +403,15 @@ async function loadStateFromDatabase() {
       ...(payload?.players || {}),
     },
     buzzState: { ...base.buzzState, ...(payload?.buzzState || {}) },
+    finalState: {
+      ...base.finalState,
+      ...(payload?.finalState || {}),
+      wagers: { ...base.finalState.wagers, ...(payload?.finalState?.wagers || {}) },
+      removedCategories: Array.isArray(payload?.finalState?.removedCategories) ? payload.finalState.removedCategories : [],
+      chooserOrder: Array.isArray(payload?.finalState?.chooserOrder)
+        ? payload.finalState.chooserOrder
+        : base.finalState.chooserOrder,
+    },
   };
 
   Object.keys(gameState.players).forEach((playerId) => {
@@ -354,10 +459,8 @@ function allPlayersConnected() {
 
 function setRoundIndex(index) {
   gameState.currentRound = index;
-  gameState.selectedQuestion = null;
-  gameState.buzzState = { lockedBy: null, active: false };
-  gameState.answerVisible = false;
-  gameState.hostNotes = "";
+  resetRoundState();
+  resetFinalState();
 }
 
 function hostOnly(socket, callback) {
@@ -436,10 +539,8 @@ loadStateFromDatabase()
             gameState.gameStarted = true;
             gameState.paused = false;
             gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
-            gameState.selectedQuestion = null;
-            gameState.buzzState = { lockedBy: null, active: false };
-            gameState.answerVisible = false;
-            gameState.hostNotes = "";
+            resetRoundState();
+            resetFinalState();
             gameState.scores = { player1: 0, player2: 0, player3: 0 };
             emitState(io);
           });
@@ -478,7 +579,12 @@ loadStateFromDatabase()
 
         socket.on("round:next", () => {
           hostOnly(socket, () => {
-            if (gameState.currentRound >= gameState.rounds.length - 1) return;
+            if (isFinalRoundActive()) return;
+            if (gameState.currentRound >= gameState.rounds.length - 1) {
+              startFinalRound();
+              emitState(io);
+              return;
+            }
             setRoundIndex(gameState.currentRound + 1);
             emitState(io);
           });
@@ -494,7 +600,7 @@ loadStateFromDatabase()
 
         socket.on("question:open", ({ categoryTitle, price }) => {
           hostOnly(socket, () => {
-            if (!gameState.gameStarted || gameState.paused) return;
+            if (!gameState.gameStarted || gameState.paused || isFinalRoundActive()) return;
             const round = gameState.rounds[gameState.currentRound];
             const category = round.categories.find((item) => item.title === categoryTitle);
             const question = category?.questions.find((item) => item.price === price);
@@ -520,10 +626,8 @@ loadStateFromDatabase()
             if (!gameState.selectedQuestion) return;
             const key = `${gameState.selectedQuestion.roundId}-${gameState.selectedQuestion.categoryTitle}-${gameState.selectedQuestion.price}`;
             gameState.openedQuestions[key] = true;
-            gameState.selectedQuestion = null;
-            gameState.buzzState = { lockedBy: null, active: false };
-            gameState.answerVisible = false;
-            gameState.hostNotes = "";
+            resetRoundState();
+            maybeStartFinalAfterLastRound();
             emitState(io);
           });
         });
@@ -656,6 +760,91 @@ loadStateFromDatabase()
             if (gameState.gameStarted || !gameState.rounds[roundIndex]) return;
             gameState.rounds[roundIndex].categories = gameState.rounds[roundIndex].categories.filter((_, index) => index !== categoryIndex);
             gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
+            emitState(io);
+          });
+        });
+
+        socket.on("editor:updateFinalCategory", ({ categoryIndex, value }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted || !gameState.finalRound.categories[categoryIndex]) return;
+            const trimmed = value?.trim();
+            if (!trimmed) return;
+            gameState.finalRound.categories[categoryIndex] = trimmed;
+            emitState(io);
+          });
+        });
+
+        socket.on("editor:updateFinalField", ({ field, value }) => {
+          hostOnly(socket, () => {
+            if (gameState.gameStarted) return;
+            if (!["question", "answer"].includes(field)) return;
+            gameState.finalRound[field] = value;
+            emitState(io);
+          });
+        });
+
+        socket.on("final:removeCategory", ({ categoryTitle }) => {
+          hostOnly(socket, () => {
+            if (!isFinalRoundActive() || gameState.finalState.phase !== "categories") return;
+            const remainingCategories = getRemainingFinalCategories(gameState.finalRound, gameState.finalState);
+            if (!remainingCategories.includes(categoryTitle)) return;
+
+            gameState.finalState.removedCategories.push(categoryTitle);
+            const updatedRemaining = getRemainingFinalCategories(gameState.finalRound, gameState.finalState);
+
+            if (updatedRemaining.length <= 1) {
+              gameState.finalState.selectedCategory = updatedRemaining[0] || null;
+              gameState.finalState.phase = "wager";
+            } else {
+              gameState.finalState.currentChooserIndex = getNextFinalChooserIndex(gameState.finalState.currentChooserIndex);
+            }
+
+            emitState(io);
+          });
+        });
+
+        socket.on("final:setWager", ({ playerId, value }) => {
+          const role = socketRoles.get(socket.id);
+          if (!isFinalRoundActive() || gameState.finalState.phase !== "wager") return;
+          if (role !== playerId) return;
+          if (!(playerId in gameState.scores)) return;
+
+          const numericValue = Number(value);
+          const maxWager = Math.max(1, Number(gameState.scores[playerId] || 0));
+          if (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > maxWager) return;
+
+          gameState.finalState.wagers[playerId] = numericValue;
+          emitState(io);
+        });
+
+        socket.on("final:revealQuestion", () => {
+          hostOnly(socket, () => {
+            if (!isFinalRoundActive() || gameState.finalState.phase !== "wager") return;
+            if (!allFinalWagersSubmitted()) return;
+            gameState.finalState.phase = "question";
+            emitState(io);
+          });
+        });
+
+        socket.on("final:toggleAnswer", () => {
+          hostOnly(socket, () => {
+            if (!isFinalRoundActive() || gameState.finalState.phase !== "question") return;
+            gameState.finalState.answerVisible = !gameState.finalState.answerVisible;
+            emitState(io);
+          });
+        });
+
+        socket.on("final:applyWager", ({ playerId, result }) => {
+          hostOnly(socket, () => {
+            if (!isFinalRoundActive() || gameState.finalState.phase !== "question") return;
+            if (!(playerId in gameState.scores)) return;
+            const wager = gameState.finalState.wagers[playerId];
+            if (typeof wager !== "number") return;
+            if (result !== "correct" && result !== "wrong") return;
+            if (gameState.finalState.wagerResults[playerId]) return;
+
+            gameState.finalState.wagerResults[playerId] = result;
+            gameState.scores[playerId] += result === "correct" ? wager : -wager;
             emitState(io);
           });
         });

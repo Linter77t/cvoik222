@@ -184,8 +184,29 @@ const defaultRounds = [
   },
 ];
 
+const defaultFinalRound = {
+  categories: [
+    "История",
+    "Кино",
+    "Музыка",
+    "Спорт",
+    "Наука",
+    "География",
+    "Литература",
+    "Технологии",
+    "Природа",
+    "Искусство",
+  ],
+  question: "Назовите самый большой океан на Земле.",
+  answer: "Тихий океан",
+};
+
 function cloneRounds(rounds) {
   return JSON.parse(JSON.stringify(rounds));
+}
+
+function cloneFinalRound(finalRound) {
+  return JSON.parse(JSON.stringify(finalRound));
 }
 
 function createPlayersMap() {
@@ -212,6 +233,7 @@ function createEmptyState() {
 
   return {
     rounds,
+    finalRound: cloneFinalRound(defaultFinalRound),
     scores: {
       player1: 0,
       player2: 0,
@@ -225,6 +247,25 @@ function createEmptyState() {
     hostNotes: "",
     gameStarted: false,
     paused: false,
+    finalState: {
+      active: false,
+      phase: "idle",
+      chooserOrder: ["player1", "player2", "player3"],
+      currentChooserIndex: 0,
+      removedCategories: [],
+      selectedCategory: null,
+      wagers: {
+        player1: null,
+        player2: null,
+        player3: null,
+      },
+      wagerResults: {
+        player1: null,
+        player2: null,
+        player3: null,
+      },
+      answerVisible: false,
+    },
     players: createPlayersMap(),
     hostNickname: "Ведущий",
   };
@@ -240,6 +281,14 @@ function getPlayersList(playersMap) {
     name: value.nickname,
     connected: value.connected,
   }));
+}
+
+function getFinalRemainingCategories(finalRound, finalState) {
+  return (finalRound?.categories || []).filter((category) => !finalState?.removedCategories?.includes(category));
+}
+
+function allFinalWagersSubmitted(finalState) {
+  return Object.values(finalState?.wagers || {}).every((value) => typeof value === "number");
 }
 
 export default function IndexPage() {
@@ -281,6 +330,13 @@ export default function IndexPage() {
   const currentRound = safeRounds[safeCurrentRoundIndex];
   const selectedQuestion = gameState.selectedQuestion;
   const playersList = getPlayersList(gameState.players);
+  const finalRound = gameState.finalRound || cloneFinalRound(defaultFinalRound);
+  const finalState = gameState.finalState || createEmptyState().finalState;
+  const finalRemainingCategories = getFinalRemainingCategories(finalRound, finalState);
+  const isFinalActive = Boolean(finalState.active);
+  const currentFinalChooserId = finalState.chooserOrder?.[finalState.currentChooserIndex] || null;
+  const currentFinalChooser = playersList.find((player) => player.id === currentFinalChooserId);
+  const currentPlayerScore = session?.id ? gameState.scores?.[session.id] || 0 : 0;
 
   const allPlayersConnected = useMemo(() => playersList.every((player) => player.connected), [playersList]);
   const remainingInRound = useMemo(
@@ -436,9 +492,9 @@ export default function IndexPage() {
                       type="button"
                       onClick={() => emit("round:next")}
                       className="rounded-xl border border-fuchsia-400/40 bg-black/30 px-4 py-2 text-sm font-semibold text-fuchsia-100 transition hover:border-fuchsia-300 hover:bg-fuchsia-950/40 disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={safeCurrentRoundIndex === safeRounds.length - 1}
+                      disabled={isFinalActive}
                     >
-                      Следующий раунд
+                      {safeCurrentRoundIndex === safeRounds.length - 1 ? "Перейти к финалу" : "Следующий раунд"}
                     </button>
                     <button
                       type="button"
@@ -495,11 +551,19 @@ export default function IndexPage() {
                     <div className="flex items-center justify-between gap-4">
                       <div>
                         <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Статус матча</p>
-                        <h2 className="mt-2 text-2xl font-bold">{currentRound.name}</h2>
+                        <h2 className="mt-2 text-2xl font-bold">{isFinalActive ? "Финал" : currentRound.name}</h2>
                       </div>
                       <div className="rounded-2xl bg-fuchsia-500/10 px-4 py-3 text-right">
-                        <div className="text-xs text-fuchsia-200/70">Осталось вопросов</div>
-                        <div className="text-2xl font-black text-fuchsia-300">{remainingInRound}</div>
+                        <div className="text-xs text-fuchsia-200/70">{isFinalActive ? "Этап финала" : "Осталось вопросов"}</div>
+                        <div className="text-2xl font-black text-fuchsia-300">
+                          {isFinalActive
+                            ? finalState.phase === "categories"
+                              ? `${finalRemainingCategories.length} катег.`
+                              : finalState.phase === "wager"
+                                ? "Ставки"
+                                : "Вопрос"
+                            : remainingInRound}
+                        </div>
                       </div>
                     </div>
 
@@ -538,7 +602,7 @@ export default function IndexPage() {
                             type="button"
                             onClick={() => emit("round:set", index)}
                             className={`rounded-2xl border px-4 py-3 text-left transition ${
-                              safeCurrentRoundIndex === index
+                              !isFinalActive && safeCurrentRoundIndex === index
                                 ? "border-fuchsia-400 bg-fuchsia-700/20 text-white"
                                 : "border-fuchsia-500/20 bg-black/20 text-fuchsia-100/80 hover:border-fuchsia-400/50"
                             }`}
@@ -547,6 +611,14 @@ export default function IndexPage() {
                             <div className="mt-1 text-xs text-fuchsia-200/60">Категорий: {item.categories.length}</div>
                           </button>
                         ))}
+                        <div
+                          className={`rounded-2xl border px-4 py-3 text-left ${
+                            isFinalActive ? "border-amber-400/60 bg-amber-500/10 text-white" : "border-fuchsia-500/20 bg-black/20 text-fuchsia-100/60"
+                          }`}
+                        >
+                          <div className="text-sm font-bold">Финал</div>
+                          <div className="mt-1 text-xs text-fuchsia-200/60">10 категорий, ставки и один вопрос</div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -626,6 +698,40 @@ export default function IndexPage() {
                         <p className="mt-3 text-sm text-fuchsia-100/70">
                           Все изменения здесь мгновенно видны у всех подключённых участников.
                         </p>
+                      </div>
+
+                      <div className="rounded-3xl border border-amber-400/20 bg-amber-500/5 p-5">
+                        <p className="text-xs uppercase tracking-[0.3em] text-amber-300/70">Настройка финала</p>
+                        <h3 className="mt-2 text-2xl font-bold text-white">Категории и финальный вопрос</h3>
+                        <div className="mt-5 grid gap-3 md:grid-cols-2">
+                          {finalRound.categories.map((category, categoryIndex) => (
+                            <input
+                              key={`${category}-${categoryIndex}`}
+                              value={category}
+                              onChange={(event) => emit("editor:updateFinalCategory", { categoryIndex, value: event.target.value })}
+                              className="w-full rounded-2xl border border-amber-400/20 bg-[#150a21] px-4 py-3 text-white outline-none focus:border-amber-300"
+                              placeholder={`Категория ${categoryIndex + 1}`}
+                            />
+                          ))}
+                        </div>
+                        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                          <label className="block">
+                            <span className="mb-2 block text-xs uppercase tracking-[0.2em] text-amber-200/70">Финальный вопрос</span>
+                            <textarea
+                              value={finalRound.question}
+                              onChange={(event) => emit("editor:updateFinalField", { field: "question", value: event.target.value })}
+                              className="h-32 w-full rounded-2xl border border-amber-400/20 bg-[#150a21] px-4 py-3 text-white outline-none focus:border-amber-300"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-2 block text-xs uppercase tracking-[0.2em] text-amber-200/70">Ответ на финал</span>
+                            <textarea
+                              value={finalRound.answer}
+                              onChange={(event) => emit("editor:updateFinalField", { field: "answer", value: event.target.value })}
+                              className="h-32 w-full rounded-2xl border border-amber-400/20 bg-[#150a21] px-4 py-3 text-white outline-none focus:border-amber-300"
+                            />
+                          </label>
+                        </div>
                       </div>
 
                       <div className="space-y-5">
@@ -738,6 +844,156 @@ export default function IndexPage() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  ) : isFinalActive ? (
+                    <div className="space-y-6">
+                      <div className="rounded-[28px] border border-amber-400/25 bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.12),_rgba(0,0,0,0)_35%),linear-gradient(180deg,_rgba(26,12,40,1)_0%,_rgba(9,4,15,1)_100%)] p-6 sm:p-8">
+                        <p className="text-xs uppercase tracking-[0.3em] text-amber-300/80">Финал</p>
+                        <h2 className="mt-2 text-3xl font-black text-white">Осталась последняя тема и один вопрос</h2>
+                        <p className="mt-3 max-w-3xl text-sm text-fuchsia-100/75">
+                          Игроки по очереди называют по одной категории, ведущий убирает их, пока не останется одна. Затем игроки ставят свои баллы, и только после этого открывается финальный вопрос.
+                        </p>
+                      </div>
+
+                      {finalState.phase === "categories" ? (
+                        <div className="space-y-5">
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-5">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Сейчас выбирает</div>
+                                <div className="mt-2 text-2xl font-bold text-white">{currentFinalChooser?.name || "Игрок"}</div>
+                              </div>
+                              <div className="rounded-2xl bg-amber-500/10 px-4 py-3 text-right">
+                                <div className="text-xs text-amber-200/70">Осталось категорий</div>
+                                <div className="text-3xl font-black text-amber-300">{finalRemainingCategories.length}</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            {finalRound.categories.map((category) => {
+                              const removed = finalState.removedCategories.includes(category);
+                              return (
+                                <button
+                                  key={category}
+                                  type="button"
+                                  onClick={() => emit("final:removeCategory", { categoryTitle: category })}
+                                  disabled={removed}
+                                  className={`rounded-3xl border px-5 py-6 text-left transition ${
+                                    removed
+                                      ? "cursor-not-allowed border-fuchsia-500/10 bg-[#241230] text-fuchsia-100/25"
+                                      : "border-amber-400/30 bg-amber-500/10 text-white hover:border-amber-300 hover:bg-amber-500/15"
+                                  }`}
+                                >
+                                  <div className="text-xl font-bold">{category}</div>
+                                  <div className="mt-2 text-sm text-fuchsia-100/70">
+                                    {removed ? "Категория уже убрана" : "Нажмите, когда игрок назвал эту категорию"}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : finalState.phase === "wager" ? (
+                        <div className="space-y-5">
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-5">
+                            <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Тема финала</div>
+                            <div className="mt-2 text-3xl font-black text-white">{finalState.selectedCategory}</div>
+                            <p className="mt-3 text-sm text-fuchsia-100/75">
+                              Игроки сейчас отправляют ставку от 1 до своего текущего счёта и пока не видят сам вопрос.
+                            </p>
+                          </div>
+
+                          <div className="grid gap-4 lg:grid-cols-3">
+                            {totalScores.map((player) => {
+                              const wager = finalState.wagers?.[player.id];
+                              return (
+                                <div key={player.id} className="rounded-3xl border border-amber-400/20 bg-black/20 p-5">
+                                  <div className="flex items-center justify-between gap-4">
+                                    <span className="text-lg font-semibold text-white">{player.name}</span>
+                                    <span className="text-2xl font-black text-fuchsia-300">{player.score}</span>
+                                  </div>
+                                  <div className="mt-4 rounded-2xl bg-[#150a21] px-4 py-3 text-sm text-fuchsia-100/80">
+                                    {typeof wager === "number" ? `Ставка отправлена: ${wager}` : "Ставка ещё не отправлена"}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => emit("final:revealQuestion")}
+                            disabled={!allFinalWagersSubmitted(finalState)}
+                            className="rounded-2xl bg-amber-500 px-5 py-3 text-sm font-bold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Показать финальный вопрос
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-5">
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-6">
+                            <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Тема финала</div>
+                            <div className="mt-2 text-3xl font-black text-white">{finalState.selectedCategory}</div>
+                            <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-[#150a21] p-6">
+                              <div className="text-center text-2xl font-bold leading-relaxed text-white">{finalRound.question}</div>
+                            </div>
+                            {finalState.answerVisible && (
+                              <div className="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-900/15 p-5">
+                                <div className="text-xs uppercase tracking-[0.25em] text-emerald-300/80">Ответ</div>
+                                <div className="mt-2 text-2xl font-bold text-white">{finalRound.answer}</div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="grid gap-4 lg:grid-cols-3">
+                            {totalScores.map((player) => {
+                              const wager = finalState.wagers?.[player.id];
+                              const result = finalState.wagerResults?.[player.id];
+                              return (
+                                <div key={player.id} className="rounded-3xl border border-amber-400/20 bg-black/20 p-5">
+                                  <div className="flex items-center justify-between gap-4">
+                                    <span className="text-lg font-semibold text-white">{player.name}</span>
+                                    <span className="text-2xl font-black text-fuchsia-300">{player.score}</span>
+                                  </div>
+                                  <div className="mt-3 text-sm text-fuchsia-100/75">Ставка: {typeof wager === "number" ? wager : "—"}</div>
+                                  <div className="mt-4 flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => emit("final:applyWager", { playerId: player.id, result: "correct" })}
+                                      disabled={Boolean(result) || typeof wager !== "number"}
+                                      className="flex-1 rounded-xl bg-emerald-700 px-3 py-2 text-sm font-bold text-white transition hover:bg-emerald-600 disabled:opacity-40"
+                                    >
+                                      Верно
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => emit("final:applyWager", { playerId: player.id, result: "wrong" })}
+                                      disabled={Boolean(result) || typeof wager !== "number"}
+                                      className="flex-1 rounded-xl bg-rose-800 px-3 py-2 text-sm font-bold text-white transition hover:bg-rose-700 disabled:opacity-40"
+                                    >
+                                      Неверно
+                                    </button>
+                                  </div>
+                                  {result && (
+                                    <div className="mt-3 text-xs uppercase tracking-[0.25em] text-amber-200/70">
+                                      {result === "correct" ? "Ставка засчитана как верная" : "Ставка засчитана как неверная"}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => emit("final:toggleAnswer")}
+                            className="rounded-2xl border border-emerald-400/35 bg-emerald-700/20 px-5 py-3 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300"
+                          >
+                            {finalState.answerVisible ? "Скрыть правильный ответ" : "Открыть правильный ответ"}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : !selectedQuestion ? (
                     <div>
@@ -1023,6 +1279,107 @@ export default function IndexPage() {
                           ))}
                         </div>
                       </div>
+                    </div>
+                  ) : isFinalActive ? (
+                    <div className="space-y-6">
+                      <div className="rounded-3xl border border-amber-400/20 bg-amber-500/5 p-6">
+                        <p className="text-xs uppercase tracking-[0.3em] text-amber-300/70">Финал</p>
+                        <h2 className="mt-3 text-3xl font-black text-white">Финальный этап начался</h2>
+                        <p className="mt-3 text-sm text-fuchsia-100/75">
+                          Сначала ведущий убирает категории по одной, потом вы отправляете скрытую ставку, и только после этого увидите вопрос.
+                        </p>
+                      </div>
+
+                      {finalState.phase === "categories" ? (
+                        <div className="space-y-5">
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-5 text-center">
+                            <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Сейчас выбирает категорию для удаления</div>
+                            <div className="mt-2 text-3xl font-black text-white">{currentFinalChooser?.name || "Игрок"}</div>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            {finalRound.categories.map((category) => {
+                              const removed = finalState.removedCategories.includes(category);
+                              const selected = finalState.selectedCategory === category;
+                              return (
+                                <div
+                                  key={category}
+                                  className={`rounded-3xl border px-5 py-6 ${
+                                    removed
+                                      ? "border-fuchsia-500/10 bg-[#241230] text-fuchsia-100/25"
+                                      : selected
+                                        ? "border-amber-300 bg-amber-500/15 text-white"
+                                        : "border-amber-400/20 bg-black/20 text-white"
+                                  }`}
+                                >
+                                  <div className="text-xl font-bold">{category}</div>
+                                  <div className="mt-2 text-sm text-fuchsia-100/70">
+                                    {removed ? "Категория убрана" : selected ? "Эта категория осталась на финал" : "Категория ещё участвует"}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : finalState.phase === "wager" ? (
+                        <div className="space-y-5">
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-5">
+                            <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Оставшаяся категория</div>
+                            <div className="mt-2 text-3xl font-black text-white">{finalState.selectedCategory}</div>
+                            <p className="mt-3 text-sm text-fuchsia-100/75">Введите ставку от 1 до вашего текущего счёта. Вопрос пока скрыт.</p>
+                          </div>
+
+                          <form
+                            className="rounded-3xl border border-amber-400/20 bg-black/20 p-6"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              const formData = new FormData(event.currentTarget);
+                              emit("final:setWager", { playerId: account.id, value: formData.get("wager") });
+                            }}
+                          >
+                            <label className="block">
+                              <span className="mb-2 block text-sm text-fuchsia-100/80">Ваша ставка</span>
+                              <input
+                                name="wager"
+                                type="number"
+                                min="1"
+                                max={Math.max(1, currentPlayerScore)}
+                                defaultValue={typeof finalState.wagers?.[account.id] === "number" ? finalState.wagers[account.id] : ""}
+                                className="w-full rounded-2xl border border-amber-400/20 bg-[#150a21] px-4 py-3 text-white outline-none focus:border-amber-300"
+                                placeholder={`От 1 до ${Math.max(1, currentPlayerScore)}`}
+                              />
+                            </label>
+                            <button
+                              type="submit"
+                              className="mt-4 w-full rounded-2xl bg-amber-500 px-4 py-3 text-sm font-bold text-black transition hover:bg-amber-400"
+                            >
+                              {typeof finalState.wagers?.[account.id] === "number" ? "Обновить ставку" : "Отправить ставку"}
+                            </button>
+                          </form>
+                        </div>
+                      ) : (
+                        <div className="space-y-5">
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-5">
+                            <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Тема финала</div>
+                            <div className="mt-2 text-3xl font-black text-white">{finalState.selectedCategory}</div>
+                          </div>
+
+                          <div className="rounded-3xl border border-fuchsia-500/20 bg-black/20 p-6">
+                            <p className="text-center text-2xl font-bold leading-relaxed text-white">{finalRound.question}</p>
+                          </div>
+
+                          {finalState.answerVisible && (
+                            <div className="rounded-3xl border border-emerald-400/20 bg-emerald-900/15 p-6">
+                              <div className="text-xs uppercase tracking-[0.25em] text-emerald-300/80">Правильный ответ</div>
+                              <div className="mt-3 text-2xl font-bold text-white">{finalRound.answer}</div>
+                            </div>
+                          )}
+
+                          <div className="rounded-3xl border border-amber-400/20 bg-black/20 p-5 text-center text-sm text-fuchsia-100/70">
+                            Ведущий проверяет ответы и сам засчитывает ставки.
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : !selectedQuestion ? (
                     <div>
