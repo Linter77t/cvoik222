@@ -506,6 +506,7 @@ loadStateFromDatabase()
               price: question.price,
               question: question.question,
               answer: question.answer,
+              imageUrl: question.imageUrl || "",
             };
             gameState.buzzState = { lockedBy: null, active: true };
             gameState.answerVisible = false;
@@ -643,7 +644,7 @@ loadStateFromDatabase()
             const prices = round.values.length ? round.values : [100, 200, 300, 400, 500];
             round.categories.push({
               title: `Новая категория ${round.categories.length + 1}`,
-              questions: prices.map((price) => ({ price, question: "Новый вопрос", answer: "Новый ответ" })),
+              questions: prices.map((price) => ({ price, question: "Новый вопрос", answer: "Новый ответ", imageUrl: "" })),
             });
             gameState.openedQuestions = createInitialOpenedState(gameState.rounds);
             emitState(io);

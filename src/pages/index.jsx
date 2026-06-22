@@ -715,6 +715,21 @@ export default function IndexPage() {
                                         }
                                         className="h-28 w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-white outline-none focus:border-fuchsia-400"
                                       />
+                                      <span className="mb-2 mt-3 block text-xs uppercase tracking-[0.2em] text-fuchsia-300/70">Ссылка на картинку</span>
+                                      <input
+                                        value={question.imageUrl || ""}
+                                        onChange={(event) =>
+                                          emit("editor:updateQuestionField", {
+                                            roundIndex: safeCurrentRoundIndex,
+                                            categoryIndex,
+                                            questionIndex,
+                                            field: "imageUrl",
+                                            value: event.target.value,
+                                          })
+                                        }
+                                        className="w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-white outline-none focus:border-fuchsia-400"
+                                        placeholder="https://... или /images/question.jpg"
+                                      />
                                     </label>
                                   </div>
                                 </div>
@@ -800,6 +815,27 @@ export default function IndexPage() {
                             />
                           </label>
                         </div>
+
+                        <label className="mt-4 block rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
+                          <span className="text-xs uppercase tracking-[0.25em] text-fuchsia-300/70">Ссылка на картинку</span>
+                          <input
+                            value={selectedQuestion.imageUrl || ""}
+                            onChange={(event) => emit("question:updateField", { field: "imageUrl", value: event.target.value })}
+                            className="mt-3 w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-sm text-white outline-none focus:border-fuchsia-400"
+                            placeholder="https://... или /images/question.jpg"
+                          />
+                        </label>
+
+                        {selectedQuestion.imageUrl && (
+                          <div className="mt-4 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
+                            <div className="text-xs uppercase tracking-[0.25em] text-fuchsia-300/70">Предпросмотр картинки</div>
+                            <img
+                              src={selectedQuestion.imageUrl}
+                              alt="Иллюстрация вопроса"
+                              className="mt-4 max-h-[360px] w-full rounded-2xl object-contain"
+                            />
+                          </div>
+                        )}
 
                         <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
                           <div className="rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
@@ -1041,6 +1077,28 @@ export default function IndexPage() {
                         <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-6">
                           <p className="text-center text-2xl font-bold leading-relaxed text-white">{selectedQuestion.question}</p>
                         </div>
+
+                        {selectedQuestion.imageUrl && (
+                          <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-6">
+                            <img
+                              src={selectedQuestion.imageUrl}
+                              alt="Иллюстрация вопроса"
+                              className="max-h-[420px] w-full rounded-2xl object-contain"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+
+                        {selectedQuestion.imageUrl && (
+                          <div className="mt-6 rounded-3xl border border-fuchsia-500/20 bg-black/20 p-6">
+                            <img
+                              src={selectedQuestion.imageUrl}
+                              alt="Иллюстрация вопроса"
+                              className="max-h-[420px] w-full rounded-2xl object-contain"
+                            />
+                          </div>
+                        )}
 
                         {gameState.answerVisible && (
                           <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-900/15 p-6">
