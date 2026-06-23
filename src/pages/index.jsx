@@ -577,7 +577,7 @@ export default function IndexPage() {
                 </div>
               </header>
 
-              <section className="grid gap-6 xl:grid-cols-[0.82fr_minmax(0,1.5fr)_380px] xl:items-start">
+              <section className="grid gap-6 xl:grid-cols-[0.86fr_minmax(0,1.72fr)_260px] xl:items-start">
                 <aside className="space-y-6">
                   <div className="rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
                     <h2 className="text-xl font-bold">Никнеймы</h2>
@@ -1289,8 +1289,8 @@ export default function IndexPage() {
                   )}
                 </section>
 
-                <aside className="space-y-6 xl:pl-6 xl:ml-6 xl:border-l xl:border-fuchsia-500/10">
-                  <div className="flex items-center justify-between gap-3 rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
+                <aside className="space-y-4 xl:pl-4 xl:ml-2 xl:border-l xl:border-fuchsia-500/10">
+                  <div className="flex items-center justify-between gap-3 rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-4">
                     <div>
                       <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Управление</p>
                       <h2 className="mt-2 text-2xl font-bold text-white">Меню ведущего</h2>
@@ -1300,7 +1300,7 @@ export default function IndexPage() {
                     </span>
                   </div>
 
-                  <div className="rounded-3xl border border-fuchsia-500/15 bg-black/20 p-4">
+                  <div className="rounded-3xl border border-fuchsia-500/15 bg-black/20 p-3">
                     <div className="text-sm font-semibold text-white">Сообщение для всех</div>
                     <textarea
                       value={globalMessageDraft}
@@ -1336,7 +1336,7 @@ export default function IndexPage() {
                             </div>
                           </div>
 
-                          <div className="mt-3 grid grid-cols-2 gap-2">
+                          <div className="mt-3 grid gap-2">
                             <button
                               type="button"
                               onClick={() => emit("host:playerControl", { playerId: player.id, action: "setDisabled", value: !isDisabled })}

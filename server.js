@@ -736,6 +736,13 @@ loadStateFromDatabase()
             if (action === "forceAnswer") {
               gameState.buzzState.forcedPlayerId = value ? playerId : null;
               if (value) {
+                gameState.buzzState = {
+                  ...gameState.buzzState,
+                  lockedBy: playerId,
+                  active: false,
+                  availableAt: Date.now(),
+                };
+              } else if (gameState.buzzState.lockedBy === playerId) {
                 gameState.buzzState.lockedBy = null;
                 gameState.buzzState.active = true;
                 gameState.buzzState.availableAt = Date.now();
