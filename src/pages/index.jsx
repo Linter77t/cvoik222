@@ -319,6 +319,7 @@ export default function IndexPage() {
   const [scoreAdjustments, setScoreAdjustments] = useState({ player1: "", player2: "", player3: "" });
   const [globalMessageDraft, setGlobalMessageDraft] = useState("");
   const [personalMessageDrafts, setPersonalMessageDrafts] = useState({ player1: "", player2: "", player3: "" });
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     const socket = io({ transports: ["websocket", "polling"] });
@@ -359,13 +360,17 @@ export default function IndexPage() {
   const currentFinalChooser = playersList.find((player) => player.id === currentFinalChooserId);
   const currentPlayerScore = session?.id ? gameState.scores?.[session.id] || 0 : 0;
   const buzzAvailableAt = gameState.buzzState?.availableAt || null;
-  const buzzCountdownMs = buzzAvailableAt ? Math.max(0, buzzAvailableAt - Date.now()) : 0;
-  const buzzCountdownSeconds = Math.ceil(buzzCountdownMs / 1000);
+  const buzzCountdownMs = buzzAvailableAt ? Math.max(0, buzzAvailableAt - now) : 0;
+  const buzzCountdownSeconds = Math.max(0, buzzCountdownMs / 1000).toFixed(1);
   const currentPersonalMessage = session?.id ? gameState.messages?.personal?.[session.id] || "" : "";
   const isCurrentPlayerBlocked = Boolean(session?.id && gameState.buzzState?.blockedPlayers?.includes(session.id));
   const isCurrentPlayerDisabled = Boolean(session?.id && gameState.buzzState?.disabledPlayers?.includes(session.id));
   const isForcedToAnotherPlayer = Boolean(
     session?.id && gameState.buzzState?.forcedPlayerId && gameState.buzzState.forcedPlayerId !== session.id,
+  );
+  const lockedPlayerName = playersList.find((player) => player.id === gameState.buzzState?.lockedBy)?.name;
+  const currentPlayerMissedBuzz = Boolean(
+    session?.id && gameState.buzzState?.lockedBy && gameState.buzzState.lockedBy !== session.id && !isCurrentPlayerBlocked,
   );
 
   const allPlayersConnected = useMemo(() => playersList.every((player) => player.connected), [playersList]);
@@ -405,6 +410,12 @@ export default function IndexPage() {
     const timer = setTimeout(() => socket.emit("question:syncBuzzWindow"), buzzAvailableAt - Date.now() + 20);
     return () => clearTimeout(timer);
   }, [selectedQuestion, buzzAvailableAt, socket]);
+
+  useEffect(() => {
+    if (!selectedQuestion || !buzzAvailableAt || buzzCountdownMs <= 0) return undefined;
+    const interval = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(interval);
+  }, [selectedQuestion, buzzAvailableAt, buzzCountdownMs]);
 
   function handleLogin(event) {
     event.preventDefault();
@@ -566,7 +577,7 @@ export default function IndexPage() {
                 </div>
               </header>
 
-              <section className="grid gap-6 xl:grid-cols-[0.9fr_1.45fr_0.95fr]">
+              <section className="grid gap-6 xl:grid-cols-[0.82fr_minmax(0,1.5fr)_380px] xl:items-start">
                 <aside className="space-y-6">
                   <div className="rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
                     <h2 className="text-xl font-bold">Никнеймы</h2>
@@ -1278,8 +1289,8 @@ export default function IndexPage() {
                   )}
                 </section>
 
-                <aside className="space-y-6 rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
-                  <div className="flex items-center justify-between gap-3">
+                <aside className="space-y-6 xl:pl-6 xl:ml-6 xl:border-l xl:border-fuchsia-500/10">
+                  <div className="flex items-center justify-between gap-3 rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
                     <div>
                       <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Управление</p>
                       <h2 className="mt-2 text-2xl font-bold text-white">Меню ведущего</h2>
@@ -1703,10 +1714,20 @@ export default function IndexPage() {
                           className={`w-full rounded-3xl px-6 py-8 text-2xl font-black transition ${
                             gameState.buzzState?.lockedBy === account.id
                               ? "border border-emerald-400 bg-emerald-600/20 text-white"
-                              : "border border-fuchsia-400/35 bg-fuchsia-600 text-white hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-40"
+                              : isCurrentPlayerBlocked || currentPlayerMissedBuzz || isCurrentPlayerDisabled
+                                ? "border border-rose-400 bg-rose-700/25 text-white"
+                                : "border border-fuchsia-400/35 bg-fuchsia-600 text-white hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-40"
                           }`}
                         >
-                          {gameState.buzzState?.lockedBy === account.id ? "Вы отвечаете" : "Нажать кнопку ответа"}
+                          {gameState.buzzState?.lockedBy === account.id
+                            ? "Вы нажали первым"
+                            : isCurrentPlayerBlocked
+                              ? "Вы ответили неправильно"
+                              : isCurrentPlayerDisabled
+                                ? "Ответ запрещён"
+                                : currentPlayerMissedBuzz
+                                  ? `Не успели — нажал ${lockedPlayerName}`
+                                  : "Нажать кнопку ответа"}
                         </button>
 
                         <div className="mt-4 text-center text-sm text-fuchsia-100/70">
@@ -1723,7 +1744,7 @@ export default function IndexPage() {
                                     : gameState.buzzState?.lockedBy
                                       ? gameState.buzzState.lockedBy === account.id
                                         ? "Ведущий передал право ответа вам"
-                                        : `Сейчас отвечает ${playersList.find((player) => player.id === gameState.buzzState.lockedBy)?.name}`
+                                        : `Сейчас отвечает ${lockedPlayerName}`
                                       : "Жми как можно быстрее, когда вопрос открыт"}
                         </div>
                       </div>
