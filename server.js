@@ -241,11 +241,21 @@ function getNextFinalChooserIndex(currentIndex) {
   return (currentIndex + 1) % order.length;
 }
 
+function createDefaultBuzzState() {
+  return {
+    lockedBy: null,
+    active: false,
+    availableAt: null,
+    blockedPlayers: [],
+    disabledPlayers: [],
+    forcedPlayerId: null,
+  };
+}
+
 function resetRoundState() {
   gameState.selectedQuestion = null;
-  gameState.buzzState = { lockedBy: null, active: false };
+  gameState.buzzState = createDefaultBuzzState();
   gameState.answerVisible = false;
-  gameState.hostNotes = "";
 }
 
 function resetFinalState() {
@@ -320,13 +330,20 @@ function createInitialGameState() {
     currentRound: 0,
     openedQuestions: createInitialOpenedState(rounds),
     selectedQuestion: null,
-    buzzState: { lockedBy: null, active: false },
+    buzzState: createDefaultBuzzState(),
     answerVisible: false,
-    hostNotes: "",
     gameStarted: false,
     paused: false,
     finalState: createInitialFinalState(),
     players: createPlayersMap(),
+    messages: {
+      global: "",
+      personal: {
+        player1: "",
+        player2: "",
+        player3: "",
+      },
+    },
     hostNickname: "Ведущий",
   };
 }
@@ -402,7 +419,7 @@ async function loadStateFromDatabase() {
       ...base.players,
       ...(payload?.players || {}),
     },
-    buzzState: { ...base.buzzState, ...(payload?.buzzState || {}) },
+    buzzState: { ...createDefaultBuzzState(), ...(payload?.buzzState || {}) },
     finalState: {
       ...base.finalState,
       ...(payload?.finalState || {}),
@@ -411,6 +428,14 @@ async function loadStateFromDatabase() {
       chooserOrder: Array.isArray(payload?.finalState?.chooserOrder)
         ? payload.finalState.chooserOrder
         : base.finalState.chooserOrder,
+    },
+    messages: {
+      ...base.messages,
+      ...(payload?.messages || {}),
+      personal: {
+        ...base.messages.personal,
+        ...(payload?.messages?.personal || {}),
+      },
     },
   };
 
@@ -614,9 +639,15 @@ loadStateFromDatabase()
               answer: question.answer,
               imageUrl: question.imageUrl || "",
             };
-            gameState.buzzState = { lockedBy: null, active: true };
+            gameState.buzzState = {
+              ...createDefaultBuzzState(),
+              active: false,
+              availableAt: Date.now() + 3000,
+              disabledPlayers: Object.entries(gameState.players)
+                .filter(([, player]) => player.buzzDisabled)
+                .map(([playerId]) => playerId),
+            };
             gameState.answerVisible = false;
-            gameState.hostNotes = "";
             emitState(io);
           });
         });
@@ -643,7 +674,14 @@ loadStateFromDatabase()
         socket.on("question:resetBuzz", () => {
           hostOnly(socket, () => {
             if (!gameState.selectedQuestion || gameState.paused) return;
-            gameState.buzzState = { lockedBy: null, active: true };
+            gameState.buzzState = {
+              ...createDefaultBuzzState(),
+              active: true,
+              availableAt: Date.now(),
+              disabledPlayers: gameState.buzzState.disabledPlayers || [],
+              blockedPlayers: gameState.buzzState.blockedPlayers || [],
+              forcedPlayerId: gameState.buzzState.forcedPlayerId || null,
+            };
             emitState(io);
           });
         });
@@ -672,13 +710,6 @@ loadStateFromDatabase()
           });
         });
 
-        socket.on("game:updateHostNotes", (value) => {
-          hostOnly(socket, () => {
-            gameState.hostNotes = value;
-            emitState(io);
-          });
-        });
-
         socket.on("score:update", ({ playerId, delta }) => {
           hostOnly(socket, () => {
             if (!(playerId in gameState.scores)) return;
@@ -687,11 +718,94 @@ loadStateFromDatabase()
           });
         });
 
+        socket.on("host:playerControl", ({ playerId, action, value }) => {
+          hostOnly(socket, () => {
+            if (!gameState.players[playerId]) return;
+
+            if (action === "setDisabled") {
+              gameState.players[playerId].buzzDisabled = Boolean(value);
+              const disabledPlayers = new Set(gameState.buzzState.disabledPlayers || []);
+              if (Boolean(value)) {
+                disabledPlayers.add(playerId);
+              } else {
+                disabledPlayers.delete(playerId);
+              }
+              gameState.buzzState.disabledPlayers = Array.from(disabledPlayers);
+            }
+
+            if (action === "forceAnswer") {
+              gameState.buzzState.forcedPlayerId = value ? playerId : null;
+              if (value) {
+                gameState.buzzState.lockedBy = null;
+                gameState.buzzState.active = true;
+                gameState.buzzState.availableAt = Date.now();
+              }
+            }
+
+            emitState(io);
+          });
+        });
+
+        socket.on("host:message", ({ target, playerId, value }) => {
+          hostOnly(socket, () => {
+            const text = typeof value === "string" ? value : "";
+            if (target === "global") {
+              gameState.messages.global = text;
+              emitState(io);
+              return;
+            }
+            if (target === "personal" && playerId && gameState.messages.personal[playerId] !== undefined) {
+              gameState.messages.personal[playerId] = text;
+              emitState(io);
+            }
+          });
+        });
+
+        socket.on("question:judgeAnswer", ({ playerId, result }) => {
+          hostOnly(socket, () => {
+            if (!gameState.selectedQuestion) return;
+            if (!(playerId in gameState.scores)) return;
+            if (result !== "correct" && result !== "wrong") return;
+            if (gameState.buzzState.lockedBy !== playerId) return;
+
+            if (result === "correct") {
+              gameState.scores[playerId] += gameState.selectedQuestion.price;
+              const key = `${gameState.selectedQuestion.roundId}-${gameState.selectedQuestion.categoryTitle}-${gameState.selectedQuestion.price}`;
+              gameState.openedQuestions[key] = true;
+              resetRoundState();
+              maybeStartFinalAfterLastRound();
+              emitState(io);
+              return;
+            }
+
+            gameState.scores[playerId] -= gameState.selectedQuestion.price;
+            gameState.buzzState = {
+              ...createDefaultBuzzState(),
+              active: true,
+              availableAt: Date.now(),
+              disabledPlayers: gameState.buzzState.disabledPlayers || [],
+              forcedPlayerId: gameState.buzzState.forcedPlayerId || null,
+              blockedPlayers: Array.from(new Set([...(gameState.buzzState.blockedPlayers || []), playerId])),
+            };
+            emitState(io);
+          });
+        });
+
         socket.on("buzz:lock", ({ playerId }) => {
           const role = socketRoles.get(socket.id);
-          if (!gameState.selectedQuestion || !gameState.buzzState.active || gameState.buzzState.lockedBy || gameState.paused) return;
+          if (!gameState.selectedQuestion || gameState.paused) return;
           if (role !== playerId) return;
-          gameState.buzzState = { lockedBy: playerId, active: false };
+          if (gameState.buzzState.lockedBy) return;
+          if (gameState.buzzState.availableAt && Date.now() < gameState.buzzState.availableAt) return;
+          if ((gameState.buzzState.disabledPlayers || []).includes(playerId)) return;
+          if ((gameState.buzzState.blockedPlayers || []).includes(playerId)) return;
+          if (gameState.buzzState.forcedPlayerId && gameState.buzzState.forcedPlayerId !== playerId) return;
+          if (!gameState.buzzState.active && !(gameState.buzzState.availableAt && Date.now() >= gameState.buzzState.availableAt)) return;
+          gameState.buzzState = {
+            ...gameState.buzzState,
+            lockedBy: playerId,
+            active: false,
+          };
           emitState(io);
         });
 
@@ -712,6 +826,14 @@ loadStateFromDatabase()
 
           gameState.players[accountId].nickname = nickname;
           emitState(io);
+        });
+
+        socket.on("question:syncBuzzWindow", () => {
+          if (!gameState.selectedQuestion || gameState.paused) return;
+          if (gameState.buzzState.availableAt && Date.now() >= gameState.buzzState.availableAt && !gameState.buzzState.lockedBy) {
+            gameState.buzzState.active = true;
+            emitState(io);
+          }
         });
 
         socket.on("editor:updateRoundName", ({ roundIndex, value }) => {

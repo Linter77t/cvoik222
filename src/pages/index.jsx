@@ -209,6 +209,17 @@ function cloneFinalRound(finalRound) {
   return JSON.parse(JSON.stringify(finalRound));
 }
 
+function createDefaultBuzzState() {
+  return {
+    lockedBy: null,
+    active: false,
+    availableAt: null,
+    blockedPlayers: [],
+    disabledPlayers: [],
+    forcedPlayerId: null,
+  };
+}
+
 function createPlayersMap() {
   return {
     player1: { connected: false, nickname: "Игрок 1" },
@@ -242,9 +253,8 @@ function createEmptyState() {
     currentRound: 0,
     openedQuestions: createInitialOpenedState(rounds),
     selectedQuestion: null,
-    buzzState: { lockedBy: null, active: false },
+    buzzState: createDefaultBuzzState(),
     answerVisible: false,
-    hostNotes: "",
     gameStarted: false,
     paused: false,
     finalState: {
@@ -267,6 +277,14 @@ function createEmptyState() {
       answerVisible: false,
     },
     players: createPlayersMap(),
+    messages: {
+      global: "",
+      personal: {
+        player1: "",
+        player2: "",
+        player3: "",
+      },
+    },
     hostNickname: "Ведущий",
   };
 }
@@ -298,6 +316,9 @@ export default function IndexPage() {
   const [loginError, setLoginError] = useState("");
   const [connected, setConnected] = useState(false);
   const [gameState, setGameState] = useState(createEmptyState);
+  const [scoreAdjustments, setScoreAdjustments] = useState({ player1: "", player2: "", player3: "" });
+  const [globalMessageDraft, setGlobalMessageDraft] = useState("");
+  const [personalMessageDrafts, setPersonalMessageDrafts] = useState({ player1: "", player2: "", player3: "" });
 
   useEffect(() => {
     const socket = io({ transports: ["websocket", "polling"] });
@@ -337,6 +358,15 @@ export default function IndexPage() {
   const currentFinalChooserId = finalState.chooserOrder?.[finalState.currentChooserIndex] || null;
   const currentFinalChooser = playersList.find((player) => player.id === currentFinalChooserId);
   const currentPlayerScore = session?.id ? gameState.scores?.[session.id] || 0 : 0;
+  const buzzAvailableAt = gameState.buzzState?.availableAt || null;
+  const buzzCountdownMs = buzzAvailableAt ? Math.max(0, buzzAvailableAt - Date.now()) : 0;
+  const buzzCountdownSeconds = Math.ceil(buzzCountdownMs / 1000);
+  const currentPersonalMessage = session?.id ? gameState.messages?.personal?.[session.id] || "" : "";
+  const isCurrentPlayerBlocked = Boolean(session?.id && gameState.buzzState?.blockedPlayers?.includes(session.id));
+  const isCurrentPlayerDisabled = Boolean(session?.id && gameState.buzzState?.disabledPlayers?.includes(session.id));
+  const isForcedToAnotherPlayer = Boolean(
+    session?.id && gameState.buzzState?.forcedPlayerId && gameState.buzzState.forcedPlayerId !== session.id,
+  );
 
   const allPlayersConnected = useMemo(() => playersList.every((player) => player.connected), [playersList]);
   const remainingInRound = useMemo(
@@ -355,6 +385,21 @@ export default function IndexPage() {
     () => playersList.map((player) => ({ ...player, score: gameState.scores?.[player.id] || 0 })),
     [playersList, gameState.scores],
   );
+
+  useEffect(() => {
+    setGlobalMessageDraft(gameState.messages?.global || "");
+    setPersonalMessageDrafts({
+      player1: gameState.messages?.personal?.player1 || "",
+      player2: gameState.messages?.personal?.player2 || "",
+      player3: gameState.messages?.personal?.player3 || "",
+    });
+  }, [gameState.messages]);
+
+  useEffect(() => {
+    if (!selectedQuestion || !buzzAvailableAt || Date.now() >= buzzAvailableAt) return undefined;
+    const timer = setTimeout(() => emit("question:syncBuzzWindow"), buzzAvailableAt - Date.now() + 20);
+    return () => clearTimeout(timer);
+  }, [selectedQuestion, buzzAvailableAt]);
 
   function emit(event, payload, callback) {
     if (!socket) return;
@@ -521,7 +566,7 @@ export default function IndexPage() {
                 </div>
               </header>
 
-              <section className="grid gap-6 xl:grid-cols-[1.05fr_1.95fr]">
+              <section className="grid gap-6 xl:grid-cols-[0.9fr_1.45fr_0.95fr]">
                 <aside className="space-y-6">
                   <div className="rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
                     <h2 className="text-xl font-bold">Никнеймы</h2>
@@ -654,24 +699,51 @@ export default function IndexPage() {
                               -100
                             </button>
                           </div>
-                          {selectedQuestion && (
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => emit("score:update", { playerId: player.id, delta: selectedQuestion.price })}
-                                className="flex-1 rounded-xl border border-emerald-400/25 bg-emerald-600/20 px-3 py-2 text-sm font-bold text-emerald-100 transition hover:bg-emerald-600/30"
-                              >
-                                +{selectedQuestion.price}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => emit("score:update", { playerId: player.id, delta: -selectedQuestion.price })}
-                                className="flex-1 rounded-xl border border-rose-400/25 bg-rose-700/20 px-3 py-2 text-sm font-bold text-rose-100 transition hover:bg-rose-700/30"
-                              >
-                                -{selectedQuestion.price}
-                              </button>
-                            </div>
-                          )}
+                        {selectedQuestion && (
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => emit("score:update", { playerId: player.id, delta: selectedQuestion.price })}
+                              className="flex-1 rounded-xl border border-emerald-400/25 bg-emerald-600/20 px-3 py-2 text-sm font-bold text-emerald-100 transition hover:bg-emerald-600/30"
+                            >
+                              +{selectedQuestion.price}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => emit("score:update", { playerId: player.id, delta: -selectedQuestion.price })}
+                              className="flex-1 rounded-xl border border-rose-400/25 bg-rose-700/20 px-3 py-2 text-sm font-bold text-rose-100 transition hover:bg-rose-700/30"
+                            >
+                              -{selectedQuestion.price}
+                            </button>
+                          </div>
+                        )}
+                        <div className="mt-3 flex gap-2">
+                          <input
+                            type="number"
+                            value={scoreAdjustments[player.id] || ""}
+                            onChange={(event) =>
+                              setScoreAdjustments((prev) => ({
+                                ...prev,
+                                [player.id]: event.target.value,
+                              }))
+                            }
+                            className="flex-1 rounded-xl border border-fuchsia-500/20 bg-[#150a21] px-3 py-2 text-sm text-white outline-none focus:border-fuchsia-400"
+                            placeholder="Напр. 2500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const delta = Number(scoreAdjustments[player.id]);
+                              if (!delta) return;
+                              emit("score:update", { playerId: player.id, delta });
+                              setScoreAdjustments((prev) => ({ ...prev, [player.id]: "" }));
+                            }}
+                            className="rounded-xl bg-fuchsia-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-fuchsia-500"
+                          >
+                            Добавить
+                          </button>
+                        </div>
+
                         </div>
                       ))}
                     </div>
@@ -1093,7 +1165,7 @@ export default function IndexPage() {
                           </div>
                         )}
 
-                        <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+                        <div className="mt-6 grid gap-4">
                           <div className="rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
                             <div className="flex items-center justify-between gap-4">
                               <div>
@@ -1108,18 +1180,33 @@ export default function IndexPage() {
                                 className={`rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.25em] ${
                                   gameState.buzzState?.lockedBy
                                     ? "bg-emerald-500/20 text-emerald-300"
-                                    : gameState.buzzState?.active
-                                      ? "bg-fuchsia-500/20 text-fuchsia-200"
-                                      : "bg-white/10 text-white/70"
+                                    : gameState.buzzState?.availableAt && buzzCountdownMs > 0
+                                      ? "bg-amber-500/20 text-amber-200"
+                                      : gameState.buzzState?.active
+                                        ? "bg-fuchsia-500/20 text-fuchsia-200"
+                                        : "bg-white/10 text-white/70"
                                 }`}
                               >
                                 {gameState.buzzState?.lockedBy
                                   ? "Кнопка зафиксирована"
-                                  : gameState.buzzState?.active
-                                    ? "Ожидание нажатия"
-                                    : "Пауза"}
+                                  : gameState.buzzState?.availableAt && buzzCountdownMs > 0
+                                    ? `Блок ${buzzCountdownSeconds}с`
+                                    : gameState.buzzState?.active
+                                      ? "Ожидание нажатия"
+                                      : "Пауза"}
                               </div>
                             </div>
+
+                            {gameState.buzzState?.blockedPlayers?.length > 0 && (
+                              <div className="mt-4 rounded-2xl border border-rose-400/20 bg-rose-900/10 p-4 text-sm text-rose-100">
+                                Уже ошиблись и больше не могут отвечать:
+                                <span className="ml-2 font-semibold">
+                                  {gameState.buzzState.blockedPlayers
+                                    .map((playerId) => playersList.find((player) => player.id === playerId)?.name || playerId)
+                                    .join(", ")}
+                                </span>
+                              </div>
+                            )}
 
                             {gameState.answerVisible && (
                               <div className="mt-5 rounded-2xl border border-emerald-400/20 bg-emerald-900/15 p-4">
@@ -1127,19 +1214,6 @@ export default function IndexPage() {
                                 <div className="mt-2 text-xl font-bold text-white">{selectedQuestion.answer}</div>
                               </div>
                             )}
-                          </div>
-
-                          <div className="rounded-3xl border border-fuchsia-500/20 bg-black/20 p-5">
-                            <label className="block text-xs uppercase tracking-[0.25em] text-fuchsia-300/70" htmlFor="host-notes">
-                              Заметки ведущего
-                            </label>
-                            <textarea
-                              id="host-notes"
-                              value={gameState.hostNotes}
-                              onChange={(event) => emit("game:updateHostNotes", event.target.value)}
-                              placeholder="Записи ведущего"
-                              className="mt-3 h-40 w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-sm text-white outline-none transition placeholder:text-fuchsia-200/30 focus:border-fuchsia-400"
-                            />
                           </div>
                         </div>
                       </div>
@@ -1168,9 +1242,149 @@ export default function IndexPage() {
                           {gameState.answerVisible ? "Скрыть правильный ответ" : "Открыть правильный ответ"}
                         </button>
                       </div>
+
+                      {gameState.buzzState?.lockedBy && (
+                        <div className="mt-4 rounded-3xl border border-amber-400/25 bg-amber-500/10 p-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                              <div className="text-xs uppercase tracking-[0.25em] text-amber-300/70">Проверка ответа</div>
+                              <div className="mt-2 text-xl font-bold text-white">
+                                Отвечает {playersList.find((player) => player.id === gameState.buzzState.lockedBy)?.name}
+                              </div>
+                              <div className="mt-1 text-sm text-fuchsia-100/70">
+                                Верный ответ сразу закроет вопрос и добавит {selectedQuestion.price} баллов. Неверный — вычтет баллы и даст другим нажать.
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-3">
+                              <button
+                                type="button"
+                                onClick={() => emit("question:judgeAnswer", { playerId: gameState.buzzState.lockedBy, result: "correct" })}
+                                className="rounded-xl bg-emerald-700 px-5 py-3 text-sm font-bold text-white transition hover:bg-emerald-600"
+                              >
+                                Верно: закрыть и +{selectedQuestion.price}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => emit("question:judgeAnswer", { playerId: gameState.buzzState.lockedBy, result: "wrong" })}
+                                className="rounded-xl bg-rose-800 px-5 py-3 text-sm font-bold text-white transition hover:bg-rose-700"
+                              >
+                                Неверно: -{selectedQuestion.price} и открыть другим
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </section>
+
+                <aside className="space-y-6 rounded-3xl border border-fuchsia-500/20 bg-[#0f0618] p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-fuchsia-300/70">Управление</p>
+                      <h2 className="mt-2 text-2xl font-bold text-white">Меню ведущего</h2>
+                    </div>
+                    <span className="rounded-full bg-fuchsia-500/10 px-3 py-1 text-xs uppercase tracking-[0.2em] text-fuchsia-300">
+                      Справа
+                    </span>
+                  </div>
+
+                  <div className="rounded-3xl border border-fuchsia-500/15 bg-black/20 p-4">
+                    <div className="text-sm font-semibold text-white">Сообщение для всех</div>
+                    <textarea
+                      value={globalMessageDraft}
+                      onChange={(event) => setGlobalMessageDraft(event.target.value)}
+                      className="mt-3 h-28 w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-sm text-white outline-none focus:border-fuchsia-400"
+                      placeholder="Текст для всех игроков"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => emit("host:message", { target: "global", value: globalMessageDraft })}
+                      className="mt-3 w-full rounded-xl bg-fuchsia-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-fuchsia-500"
+                    >
+                      Отправить глобально
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {totalScores.map((player) => {
+                      const isForced = gameState.buzzState?.forcedPlayerId === player.id;
+                      const isDisabled = Boolean(gameState.players?.[player.id]?.buzzDisabled);
+                      return (
+                        <div key={`host-control-${player.id}`} className="rounded-3xl border border-fuchsia-500/15 bg-black/20 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <div className="text-lg font-bold text-white">{player.name}</div>
+                              <div className="mt-1 text-xs text-fuchsia-100/60">{player.id}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-2xl font-black text-fuchsia-300">{player.score}</div>
+                              <div className="mt-1 text-xs text-fuchsia-100/60">
+                                {isDisabled ? "Ответ запрещён" : isForced ? "Отвечает только он" : "Обычный режим"}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => emit("host:playerControl", { playerId: player.id, action: "setDisabled", value: !isDisabled })}
+                              className={`rounded-xl px-3 py-2 text-sm font-bold transition ${
+                                isDisabled
+                                  ? "bg-emerald-700 text-white hover:bg-emerald-600"
+                                  : "bg-rose-800 text-white hover:bg-rose-700"
+                              }`}
+                            >
+                              {isDisabled ? "Разрешить ответ" : "Запретить ответ"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                emit("host:playerControl", {
+                                  playerId: player.id,
+                                  action: "forceAnswer",
+                                  value: !isForced,
+                                })
+                              }
+                              className={`rounded-xl px-3 py-2 text-sm font-bold transition ${
+                                isForced
+                                  ? "bg-amber-500 text-black hover:bg-amber-400"
+                                  : "bg-sky-700 text-white hover:bg-sky-600"
+                              }`}
+                            >
+                              {isForced ? "Снять принуждение" : "Заставить отвечать"}
+                            </button>
+                          </div>
+
+                          <textarea
+                            value={personalMessageDrafts[player.id] || ""}
+                            onChange={(event) =>
+                              setPersonalMessageDrafts((prev) => ({
+                                ...prev,
+                                [player.id]: event.target.value,
+                              }))
+                            }
+                            className="mt-3 h-24 w-full rounded-2xl border border-fuchsia-500/20 bg-[#150a21] px-4 py-3 text-sm text-white outline-none focus:border-fuchsia-400"
+                            placeholder={`Личное сообщение для ${player.name}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              emit("host:message", {
+                                target: "personal",
+                                playerId: player.id,
+                                value: personalMessageDrafts[player.id] || "",
+                              })
+                            }
+                            className="mt-3 w-full rounded-xl border border-fuchsia-400/35 bg-black/20 px-4 py-3 text-sm font-semibold text-fuchsia-100 transition hover:border-fuchsia-300"
+                          >
+                            Отправить лично
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </aside>
               </section>
             </div>
           ) : (
@@ -1229,6 +1443,25 @@ export default function IndexPage() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-fuchsia-500/20 bg-[#12061d] p-6">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-xl font-bold text-white">Сообщения</h2>
+                      <span className="rounded-full bg-fuchsia-500/10 px-3 py-1 text-xs uppercase tracking-[0.25em] text-fuchsia-300">
+                        Inbox
+                      </span>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      <div className="rounded-2xl border border-fuchsia-500/15 bg-black/20 p-4">
+                        <div className="text-xs uppercase tracking-[0.25em] text-fuchsia-200/60">Глобальное</div>
+                        <div className="mt-2 text-sm text-white">{gameState.messages?.global || "Нет сообщения"}</div>
+                      </div>
+                      <div className="rounded-2xl border border-fuchsia-500/15 bg-black/20 p-4">
+                        <div className="text-xs uppercase tracking-[0.25em] text-fuchsia-200/60">Личное</div>
+                        <div className="mt-2 text-sm text-white">{currentPersonalMessage || "Нет личного сообщения"}</div>
+                      </div>
                     </div>
                   </div>
                 </aside>
@@ -1457,7 +1690,16 @@ export default function IndexPage() {
                         <button
                           type="button"
                           onClick={() => emit("buzz:lock", { playerId: account.id })}
-                          disabled={!selectedQuestion || !gameState.buzzState?.active || Boolean(gameState.buzzState?.lockedBy) || gameState.paused}
+                          disabled={
+                            !selectedQuestion ||
+                            Boolean(gameState.buzzState?.lockedBy) ||
+                            gameState.paused ||
+                            isCurrentPlayerBlocked ||
+                            isCurrentPlayerDisabled ||
+                            isForcedToAnotherPlayer ||
+                            (gameState.buzzState?.availableAt && buzzCountdownMs > 0) ||
+                            (!gameState.buzzState?.active && !(gameState.buzzState?.availableAt && buzzCountdownMs <= 0))
+                          }
                           className={`w-full rounded-3xl px-6 py-8 text-2xl font-black transition ${
                             gameState.buzzState?.lockedBy === account.id
                               ? "border border-emerald-400 bg-emerald-600/20 text-white"
@@ -1470,11 +1712,19 @@ export default function IndexPage() {
                         <div className="mt-4 text-center text-sm text-fuchsia-100/70">
                           {gameState.paused
                             ? "Игра на паузе"
-                            : gameState.buzzState?.lockedBy
-                              ? gameState.buzzState.lockedBy === account.id
-                                ? "Ведущий передал право ответа вам"
-                                : `Сейчас отвечает ${playersList.find((player) => player.id === gameState.buzzState.lockedBy)?.name}`
-                              : "Жми как можно быстрее, когда вопрос открыт"}
+                            : isCurrentPlayerDisabled
+                              ? "Ведущий запретил вам отвечать"
+                              : isCurrentPlayerBlocked
+                                ? "Вы уже ответили неверно и больше не можете отвечать на этот вопрос"
+                                : isForcedToAnotherPlayer
+                                  ? `Сейчас ведущий заставил отвечать ${playersList.find((player) => player.id === gameState.buzzState?.forcedPlayerId)?.name}`
+                                  : gameState.buzzState?.availableAt && buzzCountdownMs > 0
+                                    ? `Кнопка станет доступна через ${buzzCountdownSeconds} сек.`
+                                    : gameState.buzzState?.lockedBy
+                                      ? gameState.buzzState.lockedBy === account.id
+                                        ? "Ведущий передал право ответа вам"
+                                        : `Сейчас отвечает ${playersList.find((player) => player.id === gameState.buzzState.lockedBy)?.name}`
+                                      : "Жми как можно быстрее, когда вопрос открыт"}
                         </div>
                       </div>
                     </div>
