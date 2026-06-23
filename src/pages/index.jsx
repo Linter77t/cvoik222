@@ -386,6 +386,11 @@ export default function IndexPage() {
     [playersList, gameState.scores],
   );
 
+  function emit(event, payload, callback) {
+    if (!socket) return;
+    socket.emit(event, payload, callback);
+  }
+
   useEffect(() => {
     setGlobalMessageDraft(gameState.messages?.global || "");
     setPersonalMessageDrafts({
@@ -396,15 +401,10 @@ export default function IndexPage() {
   }, [gameState.messages]);
 
   useEffect(() => {
-    if (!selectedQuestion || !buzzAvailableAt || Date.now() >= buzzAvailableAt) return undefined;
-    const timer = setTimeout(() => emit("question:syncBuzzWindow"), buzzAvailableAt - Date.now() + 20);
+    if (!selectedQuestion || !buzzAvailableAt || Date.now() >= buzzAvailableAt || !socket) return undefined;
+    const timer = setTimeout(() => socket.emit("question:syncBuzzWindow"), buzzAvailableAt - Date.now() + 20);
     return () => clearTimeout(timer);
-  }, [selectedQuestion, buzzAvailableAt]);
-
-  function emit(event, payload, callback) {
-    if (!socket) return;
-    socket.emit(event, payload, callback);
-  }
+  }, [selectedQuestion, buzzAvailableAt, socket]);
 
   function handleLogin(event) {
     event.preventDefault();
